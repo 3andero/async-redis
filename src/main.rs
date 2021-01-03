@@ -1,5 +1,4 @@
 use bytes::{Bytes, BytesMut};
-use lazy_static::lazy_static;
 use mini_redis;
 use std::collections::HashMap;
 use std::env;
@@ -8,15 +7,11 @@ use std::net::SocketAddr;
 use std::sync::Mutex;
 use tokio::io::*;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_codec::Decoder;
+mod connection;
 mod parser;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
-
-lazy_static! {
-    pub static ref DATABASE: Mutex<HashMap<String, Bytes>> = Mutex::new(HashMap::new());
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {

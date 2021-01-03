@@ -1,4 +1,4 @@
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes};
 use tokio::net::*;
 
 use crate::Error;
@@ -16,6 +16,18 @@ pub enum Frame {
 pub enum FrameError {
     Incomplete,
     Other(crate::Error),
+}
+
+impl From<String> for FrameError {
+    fn from(msg: String) -> FrameError {
+        FrameError::Other(msg.into())
+    }
+}
+
+impl From<&str> for FrameError {
+    fn from(msg: &str) -> FrameError {
+        msg.to_string().into()
+    }
 }
 
 type FrameResult<T> = std::result::Result<T, FrameError>;
@@ -44,7 +56,7 @@ pub fn parse(buf: &mut Bytes) -> FrameResult<Frame> {
             } else {
                 next_line = get_line(buf)?;
                 if next_line.len() != len as usize {
-                    return Err(FrameError::Incomplete);
+                    return Err("Integrity Error".into());
                 }
                 Frame::BulkStrings(next_line)
             };
@@ -77,7 +89,7 @@ fn get_line(buf: &mut Bytes) -> FrameResult<Bytes> {
             matched = true;
         } else if *bt == b'\n' && matched {
             let x = buf.slice(0..pos - 1);
-            let _ = buf.split_to(pos + 1);
+            buf.advance(pos + 1);
             return Ok(x);
         } else {
             matched = false;
