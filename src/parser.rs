@@ -1,7 +1,7 @@
-use bytes::{Buf, Bytes};
+use bytes::*;
 use tokio::net::*;
 
-use crate::Error;
+use crate::{utils::*, BytesToString, Error};
 
 #[derive(Debug)]
 pub enum Frame {
@@ -32,7 +32,7 @@ impl From<&str> for FrameError {
 
 type FrameResult<T> = std::result::Result<T, FrameError>;
 
-pub fn parse(buf: &mut Bytes) -> FrameResult<Frame> {
+pub fn Decode(buf: &mut Bytes) -> FrameResult<Frame> {
     let buf0 = buf.split_to(1);
     match buf0[0] {
         b'+' => {
@@ -70,7 +70,7 @@ pub fn parse(buf: &mut Bytes) -> FrameResult<Frame> {
             } else {
                 let mut frame_arr = Vec::<Frame>::new();
                 for i in 0..len as usize {
-                    frame_arr.push(parse(buf)?)
+                    frame_arr.push(Decode(buf)?)
                 }
                 Frame::Arrays(frame_arr)
             };
@@ -99,7 +99,7 @@ fn get_line(buf: &mut Bytes) -> FrameResult<Bytes> {
 }
 
 fn get_number(line: &Bytes) -> FrameResult<i64> {
-    let x = String::from_utf8(line.to_vec()).map_err(|e| FrameError::Other(Box::new(e)))?;
+    let x = BytesToString!(line, FrameError::Other);
     let res = x
         .parse::<i64>()
         .map_err(|e| FrameError::Other(Box::new(e)))?;
@@ -107,13 +107,58 @@ fn get_number(line: &Bytes) -> FrameResult<i64> {
     Ok(res)
 }
 
+pub fn Encode(frame: &Frame) -> crate::Result<Bytes> {
+    let mut buf = BytesMut::new();
+    let msg_encoded = match frame {
+        Frame::SimpleString(msg) => {
+            format!("+{}\r\n", BytesToString!(msg))
+        }
+        Frame::Errors(msg) => {
+            format!("-{}\r\n", BytesToString!(msg))
+        }
+        Frame::Integers(num) => {
+            format!(":{}\r\n", num)
+        }
+        Frame::Null => "$-1\r\n".to_string(),
+        Frame::BulkStrings(msg) => {
+            format!("${}\r\n{}\r\n", msg.len(), BytesToString!(msg))
+        }
+        Frame::Arrays(arr) => {
+            let mut res = String::with_capacity(arr.len() * 8);
+            for f in arr.iter() {
+                res += BytesToString!(Encode(f)?).as_ref();
+            }
+            format!("*{}\r\n{}", arr.len(), res)
+        }
+    };
+    buf.put(msg_encoded.as_bytes());
+    Ok(buf.freeze())
+}
+
 #[macro_export]
-macro_rules! FrameDisplayTests {
-    ($($cmd:expr),*) => {
+macro_rules! FrameTests {
+    (Display $($cmd:expr),*) => {
         let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
         for param in params.iter_mut() {
-            let res = parser::parse(&mut param.clone());
+            let res = parser::Decode(&mut param.clone());
             println!("{:?} => {:?}", param, res);
+        }
+    };
+    (Encode $($cmd:expr),*) => {
+        let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
+        for param in params.iter_mut() {
+            let mut _p = param.clone();
+            let mut err_msg = String::new();
+            let res = match parser::Decode(&mut _p) {
+                Ok(v) => v,
+                Err(e) => {
+                    err_msg = format!("{:?}", e);
+                    parser::Frame::Null
+                }
+            };
+            let decoded = parser::Encode(&res).unwrap();
+            let equal = decoded.to_vec() == param.to_vec();
+            println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", param, _p, res, decoded, err_msg, equal);
         }
     }
 }
@@ -124,7 +169,23 @@ mod tests {
     use bytes::*;
     #[test]
     fn Displays() {
-        FrameDisplayTests!(
+        FrameTests!(Display
+            "*0\r\n",
+            "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
+            "*3\r\n:1\r\n:2\r\n:3\r\n",
+            "*-1\r\n",
+            "*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n",
+            "$6\r\nfoobar\r\n",
+            "+OK\r\n",
+            "$3\r\nfoobar\r\n",
+            "$6\r\nfoar\r\n",
+            "$6\r\rfoobar\r\n"
+        );
+    }
+
+    #[test]
+    fn Encode() {
+        FrameTests!(Encode
             "*0\r\n",
             "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
             "*3\r\n:1\r\n:2\r\n:3\r\n",

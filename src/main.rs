@@ -9,6 +9,7 @@ use tokio::io::*;
 use tokio::net::{TcpListener, TcpStream};
 mod connection;
 mod parser;
+mod utils;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;

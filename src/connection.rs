@@ -20,7 +20,7 @@ impl Connection {
         loop {
             let mut buf = Bytes::from(self.buf.to_vec());
             let origin_len = buf.len();
-            match parser::parse(&mut buf) {
+            match parser::Decode(&mut buf) {
                 Err(FrameError::Incomplete) => {}
                 Err(FrameError::Other(e)) => {
                     return Err(e);
