@@ -1,4 +1,4 @@
-use crate::parser::{self, *};
+use crate::protocol::{self, *};
 use bytes::{Buf, Bytes, BytesMut};
 use tokio::io::*;
 use tokio::net::*;
@@ -20,7 +20,7 @@ impl Connection {
         loop {
             let mut buf = Bytes::from(self.buf.to_vec());
             let origin_len = buf.len();
-            match parser::Decode(&mut buf) {
+            match protocol::Decode(&mut buf) {
                 Err(FrameError::Incomplete) => {}
                 Err(FrameError::Other(e)) => {
                     return Err(e);
@@ -41,5 +41,13 @@ impl Connection {
         }
     }
 
-    pub async fn write_frame(&mut self, frame: Frame) {}
+    pub async fn write_frame(&mut self, frame: &Frame) -> crate::Result<()> {
+        let mut frame_byte = Encode(frame)?;
+        self.stream
+            .write_buf(&mut frame_byte)
+            .await
+            .map_err(|e| Box::new(e))?;
+
+        Ok(())
+    }
 }

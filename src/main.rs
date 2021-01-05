@@ -7,8 +7,9 @@ use std::net::SocketAddr;
 use std::sync::Mutex;
 use tokio::io::*;
 use tokio::net::{TcpListener, TcpStream};
+mod cmd;
 mod connection;
-mod parser;
+mod protocol;
 mod utils;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;

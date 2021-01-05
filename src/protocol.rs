@@ -1,7 +1,7 @@
 use bytes::*;
 use tokio::net::*;
 
-use crate::{utils::*, BytesToString, Error};
+use crate::{BytesToString, Error};
 
 #[derive(Debug)]
 pub enum Frame {
@@ -12,9 +12,11 @@ pub enum Frame {
     Null,
     Arrays(Vec<Frame>),
 }
-#[derive(Debug)]
+#[derive(Debug, err_derive::Error)]
 pub enum FrameError {
+    #[error(display = "Incomplete")]
     Incomplete,
+    #[error(display = "{}", _0)]
     Other(crate::Error),
 }
 
@@ -140,7 +142,7 @@ macro_rules! FrameTests {
     (Display $($cmd:expr),*) => {
         let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
         for param in params.iter_mut() {
-            let res = parser::Decode(&mut param.clone());
+            let res = protocol::Decode(&mut param.clone());
             println!("{:?} => {:?}", param, res);
         }
     };
@@ -149,14 +151,14 @@ macro_rules! FrameTests {
         for param in params.iter_mut() {
             let mut _p = param.clone();
             let mut err_msg = String::new();
-            let res = match parser::Decode(&mut _p) {
+            let res = match protocol::Decode(&mut _p) {
                 Ok(v) => v,
                 Err(e) => {
                     err_msg = format!("{:?}", e);
-                    parser::Frame::Null
+                    protocol::Frame::Null
                 }
             };
-            let decoded = parser::Encode(&res).unwrap();
+            let decoded = protocol::Encode(&res).unwrap();
             let equal = decoded.to_vec() == param.to_vec();
             println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", param, _p, res, decoded, err_msg, equal);
         }
@@ -165,7 +167,7 @@ macro_rules! FrameTests {
 
 #[cfg(test)]
 mod tests {
-    use crate::parser;
+    use crate::protocol;
     use bytes::*;
     #[test]
     fn Displays() {
