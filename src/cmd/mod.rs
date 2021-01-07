@@ -1,19 +1,17 @@
-mod get;
+pub mod get;
 use get::*;
-mod set;
+pub mod set;
 use crate::{protocol::*, utils::*, BytesToString};
 use set::*;
 
 use bytes::*;
 
-use err_derive::Error;
-
-enum Command {
+pub enum Command {
     Get(Get),
     Set(Set),
 }
 #[derive(Debug, err_derive::Error)]
-enum ParseError {
+pub enum ParseError {
     #[error(display = "NotArray")]
     NotArray,
     #[error(display = "EndOfArr")]
@@ -67,7 +65,7 @@ impl<'a> Parser<'a> {
 }
 
 impl Command {
-    fn new(frame: &Frame) -> crate::Result<Self> {
+    pub fn new(frame: &Frame) -> crate::Result<Self> {
         let mut parser = Parser::new(frame)?;
         let cmd_string = parser.next_string()?;
         match &cmd_string.to_lowercase()[..] {

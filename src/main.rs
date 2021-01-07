@@ -11,6 +11,8 @@ mod cmd;
 mod connection;
 mod protocol;
 mod utils;
+mod db;
+mod server;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
