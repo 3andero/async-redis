@@ -1,15 +1,24 @@
 pub mod get;
 use get::*;
 pub mod set;
-use crate::{protocol::*, utils::*, BytesToString};
+use crate::{db::DB, protocol::Frame, BytesToString};
 use set::*;
 
 use bytes::*;
+use enum_dispatch::*;
 
+#[enum_dispatch]
+#[derive(Debug)]
 pub enum Command {
-    Get(Get),
-    Set(Set),
+    Get,
+    Set,
 }
+
+#[enum_dispatch(Command)]
+pub trait ExecDB {
+    fn exec(&self, db: &DB) -> Frame;
+}
+
 #[derive(Debug, err_derive::Error)]
 pub enum ParseError {
     #[error(display = "NotArray")]
@@ -69,8 +78,8 @@ impl Command {
         let mut parser = Parser::new(frame)?;
         let cmd_string = parser.next_string()?;
         match &cmd_string.to_lowercase()[..] {
-            "get" => Ok(Command::Get(Get::new(&mut parser)?)),
-            "set" => Ok(Command::Set(Set::new(&mut parser)?)),
+            "get" => Ok(Get::new(&mut parser)?.into()),
+            "set" => Ok(Set::new(&mut parser)?.into()),
             _ => unimplemented!(),
         }
     }

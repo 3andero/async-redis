@@ -12,6 +12,12 @@ pub enum Frame {
     Null,
     Arrays(Vec<Frame>),
 }
+
+impl From<Bytes> for Frame {
+    fn from(bt: Bytes) -> Frame {
+        return Frame::BulkStrings(bt);
+    }
+}
 #[derive(Debug, err_derive::Error)]
 pub enum FrameError {
     #[error(display = "Incomplete")]
@@ -35,6 +41,9 @@ impl From<&str> for FrameError {
 type FrameResult<T> = std::result::Result<T, FrameError>;
 
 pub fn Decode(buf: &mut Bytes) -> FrameResult<Frame> {
+    if buf.len() == 0 {
+        return Err(FrameError::Incomplete);
+    }
     let buf0 = buf.split_to(1);
     match buf0[0] {
         b'+' => {

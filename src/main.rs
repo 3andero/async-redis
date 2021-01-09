@@ -9,10 +9,11 @@ use tokio::io::*;
 use tokio::net::{TcpListener, TcpStream};
 mod cmd;
 mod connection;
-mod protocol;
-mod utils;
 mod db;
+mod protocol;
 mod server;
+mod shutdown;
+mod utils;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
@@ -26,16 +27,7 @@ async fn main() -> Result<()> {
 
     let addr = addr.parse::<SocketAddr>()?;
     let listener = TcpListener::bind(&addr).await?;
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let res = read(stream).await?;
-    }
-    Ok(())
-}
 
-async fn read(stream: TcpStream) -> Result<usize> {
-    let mut buf = BytesMut::new();
-    let mut bufReader = BufWriter::new(stream);
-    let ret = bufReader.read_buf(&mut buf).await?;
-    Ok(ret)
+    server::run(listener, tokio::signal::ctrl_c()).await;
+    Ok(())
 }

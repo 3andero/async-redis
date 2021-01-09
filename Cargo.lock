@@ -35,6 +35,7 @@ version = "0.1.0"
 dependencies = [
  "async-recursion",
  "bytes",
+ "enum_dispatch",
  "err-derive",
  "mini-redis",
  "tokio",
@@ -149,6 +150,18 @@ dependencies = [
  "textwrap",
  "unicode-width",
  "vec_map",
+]
+
+[[package]]
+name = "enum_dispatch"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8946e241a7774d5327d92749c50806f275f57d031d2229ecbfd65469a8ad338e"
+dependencies = [
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

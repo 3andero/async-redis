@@ -1,32 +1,31 @@
-use std::{collections::HashMap, sync::Mutex, sync::Arc};
+use crate::{cmd::*, Result};
 use bytes::*;
 use get::Get;
-use crate::{Result, cmd::*};
+use std::{collections::HashMap, sync::Arc, sync::Mutex};
 
+#[derive(Debug)]
 pub struct State {
-    database: HashMap<String, Bytes>
+    database: HashMap<String, Bytes>,
 }
 
+#[derive(Debug)]
 pub struct Shared {
-    state: Mutex<State>
+    state: Mutex<State>,
 }
 
+#[derive(Clone, Debug)]
 pub struct DB {
-    shared: Arc<Shared>
+    shared: Arc<Shared>,
 }
 
 impl DB {
     pub fn new() -> Self {
         Self {
-            shared: Arc::new(
-                Shared {
-                    state: Mutex::new(
-                        State {
-                            database: HashMap::new()
-                        }
-                    )
-                }
-            )
+            shared: Arc::new(Shared {
+                state: Mutex::new(State {
+                    database: HashMap::new(),
+                }),
+            }),
         }
     }
 
