@@ -1,12 +1,6 @@
-use bytes::{Bytes, BytesMut};
-use mini_redis;
-use std::collections::HashMap;
 use std::env;
-use std::future::Future;
 use std::net::SocketAddr;
-use std::sync::Mutex;
-use tokio::io::*;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 mod cmd;
 mod connection;
 mod db;
@@ -20,6 +14,14 @@ type Result<T> = std::result::Result<T, Error>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // tracing_subscriber::fmt::init();
+    let collector = tracing_subscriber::fmt()
+        // filter spans/events with level TRACE or higher.
+        .with_max_level(tracing::Level::ERROR)
+        // build but do not install the subscriber.
+        .finish();
+
+    let _ = tracing::subscriber::set_global_default(collector);
     let addr = env::args()
         .skip(1)
         .next()

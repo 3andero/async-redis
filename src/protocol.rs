@@ -1,7 +1,7 @@
 use bytes::*;
-use tokio::net::*;
+use tracing::*;
 
-use crate::{BytesToString, Error};
+use crate::BytesToString;
 
 #[derive(Debug)]
 pub enum Frame {
@@ -11,6 +11,7 @@ pub enum Frame {
     BulkStrings(Bytes),
     Null,
     Arrays(Vec<Frame>),
+    Ok,
 }
 
 impl From<Bytes> for Frame {
@@ -22,6 +23,8 @@ impl From<Bytes> for Frame {
 pub enum FrameError {
     #[error(display = "Incomplete")]
     Incomplete,
+    #[error(display = "Not Implemented")]
+    NotImplemented,
     #[error(display = "{}", _0)]
     Other(crate::Error),
 }
@@ -39,6 +42,9 @@ impl From<&str> for FrameError {
 }
 
 type FrameResult<T> = std::result::Result<T, FrameError>;
+
+const NilFrame: &'static [u8] = b"$-1\r\n";
+const OkFrame: &'static [u8] = b"+OK\r\n";
 
 pub fn Decode(buf: &mut Bytes) -> FrameResult<Frame> {
     if buf.len() == 0 {
@@ -74,21 +80,22 @@ pub fn Decode(buf: &mut Bytes) -> FrameResult<Frame> {
             Ok(res)
         }
         b'*' => {
-            let mut next_line = get_line(buf)?;
+            let next_line = get_line(buf)?;
             let len = get_number(&next_line)?;
             let res = if len == -1 {
                 Frame::Null
             } else {
                 let mut frame_arr = Vec::<Frame>::new();
-                for i in 0..len as usize {
+                for _ in 0..len as usize {
                     frame_arr.push(Decode(buf)?)
                 }
                 Frame::Arrays(frame_arr)
             };
             Ok(res)
         }
-        _ => {
-            unimplemented!()
+        X => {
+            error!("Not Implemented: {}", X);
+            return Err(FrameError::NotImplemented);
         }
     }
 }
@@ -119,7 +126,16 @@ fn get_number(line: &Bytes) -> FrameResult<i64> {
 }
 
 pub fn Encode(frame: &Frame) -> crate::Result<Bytes> {
-    let mut buf = BytesMut::new();
+    match frame {
+        Frame::Null => {
+            return Ok(Bytes::from(NilFrame));
+        }
+        Frame::Ok => {
+            return Ok(Bytes::from(OkFrame));
+        }
+        _ => (),
+    }
+
     let msg_encoded = match frame {
         Frame::SimpleString(msg) => {
             format!("+{}\r\n", BytesToString!(msg))
@@ -130,7 +146,6 @@ pub fn Encode(frame: &Frame) -> crate::Result<Bytes> {
         Frame::Integers(num) => {
             format!(":{}\r\n", num)
         }
-        Frame::Null => "$-1\r\n".to_string(),
         Frame::BulkStrings(msg) => {
             format!("${}\r\n{}\r\n", msg.len(), BytesToString!(msg))
         }
@@ -141,9 +156,9 @@ pub fn Encode(frame: &Frame) -> crate::Result<Bytes> {
             }
             format!("*{}\r\n{}", arr.len(), res)
         }
+        _ => unimplemented!(),
     };
-    buf.put(msg_encoded.as_bytes());
-    Ok(buf.freeze())
+    Ok(Bytes::from(msg_encoded))
 }
 
 #[macro_export]

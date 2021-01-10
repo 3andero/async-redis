@@ -1,7 +1,8 @@
-use crate::protocol::{self, *};
+use crate::protocol::*;
 use bytes::{Buf, Bytes, BytesMut};
 use tokio::io::*;
 use tokio::net::*;
+use tracing::*;
 
 #[derive(Debug)]
 pub struct Connection {
@@ -17,15 +18,19 @@ impl Connection {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn read_frame(&mut self) -> crate::Result<Option<Frame>> {
         loop {
             let mut buf = Bytes::from(self.buf.to_vec());
             let origin_len = buf.len();
-            println!("buffer: {:?}, len: {}", &buf, origin_len);
-            match protocol::Decode(&mut buf) {
+            debug!("buffer: {:?}, len: {}", &buf, origin_len);
+            match Decode(&mut buf) {
                 Err(FrameError::Incomplete) => {}
                 Err(FrameError::Other(e)) => {
                     return Err(e);
+                }
+                Err(FrameError::NotImplemented) => {
+                    return Err(Box::new(FrameError::NotImplemented));
                 }
                 Ok(frame) => {
                     self.buf.advance(origin_len - buf.len());
@@ -45,9 +50,9 @@ impl Connection {
 
     pub async fn write_frame(&mut self, frame: &Frame) -> crate::Result<()> {
         let mut frame_byte = Encode(frame)?;
-        println!("encoded frame_byte: {:?}", frame_byte);
+        debug!("encoded frame_byte: {:?}", frame_byte);
         self.stream
-            .write_buf(&mut frame_byte)
+            .write_all(&mut frame_byte)
             .await
             .map_err(|e| Box::new(e))?;
 

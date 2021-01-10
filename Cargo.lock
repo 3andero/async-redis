@@ -39,6 +39,9 @@ dependencies = [
  "err-derive",
  "mini-redis",
  "tokio",
+ "tracing",
+ "tracing-futures",
+ "tracing-subscriber",
 ]
 
 [[package]]

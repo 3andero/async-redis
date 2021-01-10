@@ -1,8 +1,6 @@
 use std::future::Future;
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::*,
-};
+use tokio::{net::TcpListener, sync::*};
+use tracing::*;
 
 use crate::{cmd::*, connection::*, db::*, shutdown::Shutdown, Result};
 
@@ -17,11 +15,12 @@ pub struct Listener {
 }
 
 impl Listener {
+    #[instrument(skip(self))]
     async fn run(&self) -> Result<()> {
-        println!("Server Started");
+        debug!("Server Started");
         loop {
             let (stream, _) = self.listener.accept().await?;
-            println!("stream accepted: {:?}", &stream);
+            debug!("stream accepted: {:?}", &stream);
 
             let conn = Connection::new(stream);
 
@@ -35,7 +34,7 @@ impl Listener {
             tokio::spawn(async move {
                 match handler.run().await {
                     Err(e) => {
-                        println!("error occur while handling: {}", e);
+                        error!("error occur while handling: {}", e);
                     }
                     _ => (),
                 }
@@ -53,9 +52,10 @@ struct Handler {
 }
 
 impl Handler {
+    #[instrument(skip(self))]
     pub async fn run(&mut self) -> Result<()> {
         while !self.shutdown_begin.is_shutdown() {
-            println!("handling: {:?}", self);
+            debug!("handling: {:?}", self);
             let opt_frame = tokio::select! {
                 _ = self.shutdown_begin.recv() => {
                     return Ok(());
@@ -63,7 +63,7 @@ impl Handler {
                 res = self.connection.read_frame() => res?
             };
 
-            println!("frame received: {:?}", opt_frame);
+            debug!("frame received: {:?}", opt_frame);
             let frame = match opt_frame {
                 Some(f) => f,
                 None => {
@@ -72,24 +72,25 @@ impl Handler {
             };
 
             let command = Command::new(&frame)?;
-            println!("parsed command: {:?}", command);
+            debug!("parsed command: {:?}", command);
             let ret_frame = command.exec(&self.db);
-            println!("ret_frame: {:?}", ret_frame);
+            debug!("ret_frame: {:?}", ret_frame);
             self.connection.write_frame(&ret_frame).await?;
         }
         Ok(())
     }
 }
 
+#[instrument(skip(shutdown_signal))]
 pub async fn run(listener: TcpListener, shutdown_signal: impl Future) {
-    println!("Serving Entered");
+    debug!("Serving Entered");
     let (shutdown_begin_tx, shutdown_begin_rx) = broadcast::channel(1);
 
     let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
 
     let server = Listener {
         listener: listener,
-        db: DB::new(),
+        db: DB::new(100),
         shutdown_begin: shutdown_begin_tx,
         shutdown_complete_rx: shutdown_complete_rx,
         shutdown_complete_tx: shutdown_complete_tx,
@@ -99,13 +100,13 @@ pub async fn run(listener: TcpListener, shutdown_signal: impl Future) {
         res = server.run() => {
             match res {
                 Err(e) => {
-                    println!("{}", e);
+                    debug!("{}", e);
                 }
                 _ => ()
             }
         }
         _ = shutdown_signal => {
-            println!("Ctrl+C");
+            debug!("Ctrl+C");
         }
     }
 
@@ -121,5 +122,5 @@ pub async fn run(listener: TcpListener, shutdown_signal: impl Future) {
     drop(shutdown_complete_tx);
 
     let _ = shutdown_complete_rx.recv().await;
-    println!("Shutdown Complete");
+    debug!("Shutdown Complete");
 }
