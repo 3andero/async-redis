@@ -16,7 +16,7 @@ impl Set {
 
 impl ExecDB for Set {
     fn exec(&self, db: &DB) -> Frame {
-        db.set(self.key.clone(), self.val.clone());
+        db.set(self.key.clone(), self.val.clone(), None);
         Frame::Ok
     }
 }
