@@ -89,11 +89,11 @@ pub async fn run(listener: TcpListener, shutdown_signal: impl Future) {
     let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
 
     let server = Listener {
-        listener: listener,
-        db: DB::new(100),
+        listener,
+        db: DB::new(),
         shutdown_begin: shutdown_begin_tx,
-        shutdown_complete_rx: shutdown_complete_rx,
-        shutdown_complete_tx: shutdown_complete_tx,
+        shutdown_complete_rx,
+        shutdown_complete_tx,
     };
 
     tokio::select! {

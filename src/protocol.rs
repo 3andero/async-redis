@@ -43,10 +43,10 @@ impl From<&str> for FrameError {
 
 type FrameResult<T> = std::result::Result<T, FrameError>;
 
-const NilFrame: &'static [u8] = b"$-1\r\n";
-const OkFrame: &'static [u8] = b"+OK\r\n";
+const NILFRAME: &'static [u8] = b"$-1\r\n";
+const OKFRAME: &'static [u8] = b"+OK\r\n";
 
-pub fn Decode(buf: &mut Bytes) -> FrameResult<Frame> {
+pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
     if buf.len() == 0 {
         return Err(FrameError::Incomplete);
     }
@@ -87,14 +87,14 @@ pub fn Decode(buf: &mut Bytes) -> FrameResult<Frame> {
             } else {
                 let mut frame_arr = Vec::<Frame>::new();
                 for _ in 0..len as usize {
-                    frame_arr.push(Decode(buf)?)
+                    frame_arr.push(decode(buf)?)
                 }
                 Frame::Arrays(frame_arr)
             };
             Ok(res)
         }
-        X => {
-            error!("Not Implemented: {}", X);
+        x => {
+            error!("Not Implemented: {}", x);
             return Err(FrameError::NotImplemented);
         }
     }
@@ -125,13 +125,13 @@ fn get_number(line: &Bytes) -> FrameResult<i64> {
     Ok(res)
 }
 
-pub fn Encode(frame: &Frame) -> crate::Result<Bytes> {
+pub fn encode(frame: &Frame) -> crate::Result<Bytes> {
     match frame {
         Frame::Null => {
-            return Ok(Bytes::from(NilFrame));
+            return Ok(Bytes::from(NILFRAME));
         }
         Frame::Ok => {
-            return Ok(Bytes::from(OkFrame));
+            return Ok(Bytes::from(OKFRAME));
         }
         _ => (),
     }
@@ -152,7 +152,7 @@ pub fn Encode(frame: &Frame) -> crate::Result<Bytes> {
         Frame::Arrays(arr) => {
             let mut res = String::with_capacity(arr.len() * 8);
             for f in arr.iter() {
-                res += BytesToString!(Encode(f)?).as_ref();
+                res += BytesToString!(encode(f)?).as_ref();
             }
             format!("*{}\r\n{}", arr.len(), res)
         }
@@ -166,7 +166,7 @@ macro_rules! FrameTests {
     (Display $($cmd:expr),*) => {
         let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
         for param in params.iter_mut() {
-            let res = protocol::Decode(&mut param.clone());
+            let res = protocol::decode(&mut param.clone());
             println!("{:?} => {:?}", param, res);
         }
     };
@@ -175,14 +175,14 @@ macro_rules! FrameTests {
         for param in params.iter_mut() {
             let mut _p = param.clone();
             let mut err_msg = String::new();
-            let res = match protocol::Decode(&mut _p) {
+            let res = match protocol::decode(&mut _p) {
                 Ok(v) => v,
                 Err(e) => {
                     err_msg = format!("{:?}", e);
                     protocol::Frame::Null
                 }
             };
-            let decoded = protocol::Encode(&res).unwrap();
+            let decoded = protocol::encode(&res).unwrap();
             let equal = decoded.to_vec() == param.to_vec();
             println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", param, _p, res, decoded, err_msg, equal);
         }
@@ -194,7 +194,7 @@ mod tests {
     use crate::protocol;
     use bytes::*;
     #[test]
-    fn Displays() {
+    fn displays() {
         FrameTests!(Display
             "*0\r\n",
             "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
@@ -210,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn Encode() {
+    fn encode() {
         FrameTests!(Encode
             "*0\r\n",
             "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
