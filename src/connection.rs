@@ -1,4 +1,5 @@
 use crate::protocol::*;
+use anyhow::{Error, Result};
 use bytes::{Buf, Bytes, BytesMut};
 use tokio::io::*;
 use tokio::net::*;
@@ -19,7 +20,7 @@ impl Connection {
     }
 
     #[instrument(skip(self))]
-    pub async fn read_frame(&mut self) -> crate::Result<Option<Frame>> {
+    pub async fn read_frame(&mut self) -> Result<Option<Frame>> {
         loop {
             let mut buf = Bytes::from(self.buf.to_vec());
             let origin_len = buf.len();
@@ -30,7 +31,7 @@ impl Connection {
                     return Err(e);
                 }
                 Err(FrameError::NotImplemented) => {
-                    return Err(Box::new(FrameError::NotImplemented));
+                    return Err(Error::new(FrameError::NotImplemented));
                 }
                 Ok(frame) => {
                     self.buf.advance(origin_len - buf.len());
@@ -42,13 +43,13 @@ impl Connection {
                 if self.buf.len() == 0 {
                     return Ok(None);
                 } else {
-                    return Err("Closed Unexpectedly".into());
+                    return Err(anyhow::anyhow!("Closed Unexpectedly"));
                 }
             }
         }
     }
 
-    pub async fn write_frame(&mut self, frame: &Frame) -> crate::Result<()> {
+    pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
         let mut frame_byte = encode(frame)?;
         debug!("encoded frame_byte: {:?}", frame_byte);
         self.stream

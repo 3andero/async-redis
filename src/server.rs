@@ -2,7 +2,7 @@ use std::future::Future;
 use tokio::{net::TcpListener, sync::*};
 use tracing::*;
 
-use crate::{cmd::*, connection::*, db::*, shutdown::Shutdown, Result};
+use crate::{cmd::*, connection::*, db::*, protocol::Frame, shutdown::Shutdown, Result};
 
 pub struct Listener {
     listener: TcpListener,
@@ -55,7 +55,7 @@ impl Handler {
     #[instrument(skip(self))]
     pub async fn run(&mut self) -> Result<()> {
         while !self.shutdown_begin.is_shutdown() {
-            debug!("handling: {:?}", self);
+            // debug!("handling: {:?}", self.db.shared.database);
             let opt_frame = tokio::select! {
                 _ = self.shutdown_begin.recv() => {
                     return Ok(());
@@ -71,9 +71,19 @@ impl Handler {
                 }
             };
 
-            let command = Command::new(&frame)?;
-            debug!("parsed command: {:?}", command);
-            let ret_frame = command.exec(&self.db);
+            let command = Command::new(&frame);
+            let ret_frame = match command {
+                Ok(cmd) => {
+                    debug!("parsed command: {:?}", cmd);
+                    cmd.exec(&self.db)
+                }
+                Err(e) => match e.downcast_ref::<CommandError>() {
+                    Some(e) => Frame::Errors(format!("{}", e).into()),
+                    None => {
+                        return Err(e);
+                    }
+                },
+            };
             debug!("ret_frame: {:?}", ret_frame);
             self.connection.write_frame(&ret_frame).await?;
         }
@@ -84,7 +94,7 @@ impl Handler {
 #[instrument(skip(shutdown_signal))]
 pub async fn run(listener: TcpListener, shutdown_signal: impl Future) {
     debug!("Serving Entered");
-    let (shutdown_begin_tx, shutdown_begin_rx) = broadcast::channel(1);
+    let (shutdown_begin_tx, _) = broadcast::channel(1);
 
     let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
 

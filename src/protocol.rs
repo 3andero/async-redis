@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Error, Result};
 use bytes::*;
 use tracing::*;
 
@@ -26,12 +27,12 @@ pub enum FrameError {
     #[error(display = "Not Implemented")]
     NotImplemented,
     #[error(display = "{}", _0)]
-    Other(crate::Error),
+    Other(Error),
 }
 
 impl From<String> for FrameError {
     fn from(msg: String) -> FrameError {
-        FrameError::Other(msg.into())
+        FrameError::Other(anyhow!(msg))
     }
 }
 
@@ -120,12 +121,12 @@ fn get_number(line: &Bytes) -> FrameResult<i64> {
     let x = BytesToString!(line, FrameError::Other);
     let res = x
         .parse::<i64>()
-        .map_err(|e| FrameError::Other(Box::new(e)))?;
+        .map_err(|e| FrameError::Other(Error::new(e)))?;
 
     Ok(res)
 }
 
-pub fn encode(frame: &Frame) -> crate::Result<Bytes> {
+pub fn encode(frame: &Frame) -> Result<Bytes> {
     match frame {
         Frame::Null => {
             return Ok(Bytes::from(NILFRAME));

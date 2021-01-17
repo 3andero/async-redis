@@ -1,14 +1,15 @@
 use crate::cmd::*;
+use anyhow::Result;
 
 #[derive(Debug)]
 pub struct Get {
-    key: String,
+    key: Bytes,
 }
 
 impl Get {
-    pub fn new(parser: &mut Parser) -> crate::Result<Get> {
+    pub fn new(parser: &mut Parser) -> Result<Get> {
         Ok(Self {
-            key: parser.next_string()?,
+            key: parser.next_bytes()?.ok_or_else(missing_operand)?,
         })
     }
 }
