@@ -1,15 +1,12 @@
+use crate::{cmd::*, protocol::Frame};
 use bytes::*;
-use std::{collections::BTreeMap, sync::atomic::AtomicU64, sync::Arc};
+use std::collections::{BTreeMap, HashMap};
 use tokio::{
-    select, spawn,
-    sync::{broadcast, mpsc},
+    select,
+    sync::{broadcast, mpsc, oneshot},
     time::{Duration, Instant},
 };
-use tracing::{debug, error};
-
-use dashmap::DashMap;
-
-const BUFFERSIZE: usize = 10;
+use tracing::debug;
 
 #[derive(Debug)]
 pub struct Entry {
@@ -19,111 +16,49 @@ pub struct Entry {
 }
 
 #[derive(Debug)]
-pub struct State {
-    database: DashMap<Bytes, Entry>,
-}
-
-#[derive(Debug)]
-pub struct Shared {
-    num_partition: usize,
-    state: State,
-    counter: AtomicU64,
-    tasks_tx: Vec<mpsc::Sender<(Instant, u64, Bytes, usize)>>,
-}
-
-impl Shared {
-    fn new() -> Self {
-        let num_partition = dashmap::shard_amount();
-        let ret = Self {
-            num_partition,
-            state: State {
-                database: DashMap::new(),
-            },
-            counter: AtomicU64::new(0),
-            tasks_tx: Vec::with_capacity(num_partition),
-        };
-        ret
-    }
-}
-#[derive(Clone, Debug)]
 pub struct DB {
-    shared: Arc<Shared>,
-    notify_background_task: Arc<broadcast::Sender<()>>,
+    database: HashMap<Bytes, Entry>,
+    expiration: BTreeMap<(Instant, u64), (Bytes, usize)>,
 }
 
 impl DB {
-    pub fn new() -> Self {
-        let mut shared = Shared::new();
-        let mut tasks_rx = Vec::with_capacity(shared.num_partition);
-
-        for _ in 0..((shared.num_partition as f64).sqrt() as usize) {
-            let (tx, rx) = mpsc::channel(BUFFERSIZE);
-            shared.tasks_tx.push(tx);
-            tasks_rx.push(rx);
-        }
-
-        let shared = Arc::new(shared);
-        let (notify_tx, _) = broadcast::channel(1);
-        for (id, rx) in tasks_rx.drain(..).enumerate() {
-            let shared_copy = shared.clone();
-            let notify_copy = notify_tx.subscribe();
-            spawn(async move {
-                purge_expired_keys(shared_copy, rx, notify_copy, id).await;
-            });
-        }
-        Self {
-            shared,
-            notify_background_task: Arc::new(notify_tx),
-        }
-    }
-
     pub fn get(&self, key: &Bytes) -> Option<Bytes> {
-        let db = &self.shared.state.database;
-        db.get(key).map(|v| v.data.clone())
+        self.database.get(key).map(|v| v.data.clone())
     }
 
-    pub fn set(&self, key: Bytes, val: Bytes, expiration_sec: Option<u64>) {
-        let nounce = self
-            .shared
-            .counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    pub fn set(&self, key: Bytes, data: Bytes, nounce: u64, expiration: Option<Instant>) {
+        // let nounce = self
+        //     .shared
+        //     .counter
+        //     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let db = &self.shared.state.database;
-        let partition_id = db.determine_map(&key);
-        let expiration = expiration_sec.map(|v| Instant::now() + Duration::new(v, 0));
-        db.insert(
+        // let db = &self.shared.state.database;
+        // let partition_id = db.determine_map(&key);
+        // let expiration = expiration_sec.map(|v| Instant::now() + Duration::new(v, 0));
+        self.database.insert(
             key.clone(),
             Entry {
-                data: val,
-                expiration: expiration.clone(),
+                data,
+                expiration,
                 nounce,
             },
         );
 
-        if let Some(when) = expiration {
-            let task_tx = self.shared.tasks_tx[partition_id % self.shared.tasks_tx.len()].clone();
-            let params = (when, nounce, key, partition_id);
-            spawn(async move {
-                match task_tx.send(params).await {
-                    Err(e) => error!("{}", e),
-                    _ => (),
-                }
-            });
-        }
+        // if let Some(when) = expiration {
+        //     let task_tx = self.shared.tasks_tx[partition_id % self.shared.tasks_tx.len()].clone();
+        //     let params = (when, nounce, key, partition_id);
+        //     spawn(async move {
+        //         match task_tx.send(params).await {
+        //             Err(e) => error!("{}", e),
+        //             _ => (),
+        //         }
+        //     });
+        // }
     }
 }
 
-impl Drop for DB {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.shared) == self.shared.num_partition + 1 {
-            let _ = self.notify_background_task.send(());
-        }
-    }
-}
-
-async fn purge_expired_keys(
-    shared: Arc<Shared>,
-    mut tasks_rx: mpsc::Receiver<(Instant, u64, Bytes, usize)>,
+pub async fn database_manager(
+    mut tasks_rx: mpsc::Receiver<(Command, oneshot::Sender<Frame>)>,
     mut shutdown: broadcast::Receiver<()>,
     taskid: usize,
 ) {

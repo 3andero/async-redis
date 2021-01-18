@@ -16,21 +16,13 @@ use enum_dispatch::*;
 pub enum Command {
     Get,
     Set,
-    UnimplementedCMD,
 }
 
 #[enum_dispatch(Command)]
 pub trait ExecDB {
     fn exec(&self, db: &DB) -> Frame;
-}
-
-#[derive(Debug)]
-pub struct UnimplementedCMD {}
-
-impl ExecDB for UnimplementedCMD {
-    fn exec(&self, _db: &DB) -> Frame {
-        Frame::SimpleString("Command not implemented".into())
-    }
+    fn get_key(&self) -> &Bytes;
+    fn set_nounce(&mut self, nounce: u64);
 }
 
 #[derive(Debug, err_derive::Error)]
@@ -49,6 +41,8 @@ pub enum CommandError {
     MissingOperation,
     #[error(display = "MissingOperand")]
     MissingOperand,
+    #[error(display = "NotImplemented")]
+    NotImplemented,
 }
 
 fn missing_operand() -> Error {
@@ -134,9 +128,7 @@ impl Command {
         match &cmd_string.to_lowercase()[..] {
             "get" => Ok(Get::new(&mut parser)?.into()),
             "set" => Ok(Set::new(&mut parser)?.into()),
-            _ => Ok(UnimplementedCMD {}.into()),
+            _ => Err(Error::new(CommandError::NotImplemented)),
         }
     }
-
-    // pub
 }

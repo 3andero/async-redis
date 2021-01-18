@@ -19,3 +19,4 @@ tracing-subscriber = "0.2.15"
 # dashmap = {version = "4.0.1", features = ["raw-api"]}
 dashmap = {git = "https://github.com/3andero/dashmap", features = ["raw-api"]}
 anyhow = { version = "1.0" }
+num_cpus = "1.13.0"

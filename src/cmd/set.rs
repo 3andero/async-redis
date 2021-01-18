@@ -6,6 +6,7 @@ pub struct Set {
     key: Bytes,
     val: Bytes,
     expiration: Option<u64>,
+    nounce: u64,
 }
 
 impl Set {
@@ -17,13 +18,22 @@ impl Set {
             key: k,
             val: v,
             expiration: expire,
+            nounce: 0,
         })
     }
 }
 
 impl ExecDB for Set {
     fn exec(&self, db: &DB) -> Frame {
-        db.set(self.key.clone(), self.val.clone(), self.expiration);
+        // db.set(self.key.clone(), self.val.clone(), self.expiration);
         Frame::Ok
+    }
+
+    fn get_key(&self) -> &Bytes {
+        &self.key
+    }
+
+    fn set_nounce(&mut self, nounce: u64) {
+        self.nounce = nounce;
     }
 }
