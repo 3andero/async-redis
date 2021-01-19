@@ -12,10 +12,10 @@ use tracing::*;
 
 use crate::{cmd::*, connection::*, db::*, protocol::Frame, shutdown::Shutdown, Result};
 
-const BUFFERSIZE: usize = 10;
+const BUFFERSIZE: usize = 150;
 
 fn num_partitions() -> usize {
-    (num_cpus::get() * 4).next_power_of_two()
+    (num_cpus::get() * 8).next_power_of_two()
 }
 
 fn calculate_hash<T: Hash>(t: &T) -> usize {
@@ -75,8 +75,6 @@ impl Dispatcher {
             notify_background_task: Arc::new(notify_tx),
         }
     }
-
-    pub fn determine_db(cmd: &Command) {}
 }
 
 impl Drop for Dispatcher {
@@ -162,18 +160,15 @@ impl Handler {
                         .shared
                         .counter
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let (ret_tx, mut ret_rx) = oneshot::channel();
-                    let notify = Arc::new(Notify::new());
+                    let (ret_tx, ret_rx) = oneshot::channel();
                     cmd.set_nounce(nounce);
                     let db_id = determine_database(calculate_hash(cmd.get_key()));
 
                     self.dispatcher.shared.tasks_tx[db_id]
-                        .clone()
-                        .send((cmd, ret_tx, notify.clone()))
+                        .send((cmd, ret_tx))
                         .await?;
 
-                    notify.notified().await;
-                    ret_rx.try_recv()?
+                    ret_rx.await?
                 }
                 Err(e) => match e.downcast_ref::<CommandError>() {
                     Some(e) => Frame::Errors(format!("{}", e).into()),
