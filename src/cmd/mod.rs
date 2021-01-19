@@ -20,7 +20,7 @@ pub enum Command {
 
 #[enum_dispatch(Command)]
 pub trait ExecDB {
-    fn exec(&self, db: &DB) -> Frame;
+    fn exec(&self, db: &mut DB) -> Frame;
     fn get_key(&self) -> &Bytes;
     fn set_nounce(&mut self, nounce: u64);
 }

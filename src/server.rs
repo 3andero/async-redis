@@ -33,7 +33,7 @@ pub struct Shared {
     num_partition: usize,
     // state: State,
     counter: AtomicU64,
-    tasks_tx: Vec<mpsc::Sender<(Command, oneshot::Sender<Frame>)>>,
+    tasks_tx: Vec<mpsc::Sender<TaskParam>>,
 }
 
 impl Shared {
@@ -162,17 +162,18 @@ impl Handler {
                         .shared
                         .counter
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let (ret_tx, ret_rx) = oneshot::channel();
+                    let (ret_tx, mut ret_rx) = oneshot::channel();
+                    let notify = Arc::new(Notify::new());
                     cmd.set_nounce(nounce);
                     let db_id = determine_database(calculate_hash(cmd.get_key()));
 
                     self.dispatcher.shared.tasks_tx[db_id]
                         .clone()
-                        .send((cmd, ret_tx))
+                        .send((cmd, ret_tx, notify.clone()))
                         .await?;
-                    
-                    let ret = ret_rx.()?
-                    unimplemented!();
+
+                    notify.notified().await;
+                    ret_rx.try_recv()?
                 }
                 Err(e) => match e.downcast_ref::<CommandError>() {
                     Some(e) => Frame::Errors(format!("{}", e).into()),

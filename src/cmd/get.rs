@@ -17,7 +17,7 @@ impl Get {
 }
 
 impl ExecDB for Get {
-    fn exec(&self, db: &DB) -> Frame {
+    fn exec(&self, db: &mut DB) -> Frame {
         db.get(&self.key).map_or(Frame::Null, |v| v.into())
     }
 

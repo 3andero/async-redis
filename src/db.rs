@@ -1,12 +1,17 @@
 use crate::{cmd::*, protocol::Frame};
 use bytes::*;
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 use tokio::{
     select,
-    sync::{broadcast, mpsc, oneshot},
+    sync::{broadcast, mpsc, oneshot, Notify},
     time::{Duration, Instant},
 };
 use tracing::debug;
+
+pub type TaskParam = (Command, oneshot::Sender<Frame>, Arc<Notify>);
 
 #[derive(Debug)]
 pub struct Entry {
@@ -17,11 +22,22 @@ pub struct Entry {
 
 #[derive(Debug)]
 pub struct DB {
-    database: HashMap<Bytes, Entry>,
-    expiration: BTreeMap<(Instant, u64), (Bytes, usize)>,
+    pub database: HashMap<Bytes, Entry>,
+    pub expiration: BTreeMap<(Instant, u64), Bytes>,
+    pub when: Option<Instant>,
+    pub id: usize,
 }
 
 impl DB {
+    fn new(id: usize) -> Self {
+        Self {
+            database: HashMap::new(),
+            expiration: BTreeMap::new(),
+            when: None,
+            id,
+        }
+    }
+
     pub fn get(&self, key: &Bytes) -> Option<Bytes> {
         self.database.get(key).map(|v| v.data.clone())
     }
@@ -34,9 +50,9 @@ impl DB {
 
         // let db = &self.shared.state.database;
         // let partition_id = db.determine_map(&key);
-        // let expiration = expiration_sec.map(|v| Instant::now() + Duration::new(v, 0));
+
         self.database.insert(
-            key.clone(),
+            key,
             Entry {
                 data,
                 expiration,
@@ -58,50 +74,33 @@ impl DB {
 }
 
 pub async fn database_manager(
-    mut tasks_rx: mpsc::Receiver<(Command, oneshot::Sender<Frame>)>,
+    mut tasks_rx: mpsc::Receiver<TaskParam>,
     mut shutdown: broadcast::Receiver<()>,
     taskid: usize,
 ) {
     let mut when: Option<Instant> = None;
-    let mut expirations: BTreeMap<(Instant, u64), (Bytes, usize)> = BTreeMap::new();
+    let db = DB::new(taskid);
     debug!("[{}] starting backgroud task", taskid);
 
     loop {
         let now = Instant::now();
 
+        let res = tasks_rx.recv().await;
+        {
+            if res.is_none() {
+                continue;
+            }
+            let (cmd, ret_tx, notify) = res.unwrap();
+            // let now = Instant::now();
+            debug!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
+            ret_tx.send(cmd.exec(&mut db));
+            notify.notify_one();
+        }
+
         select! {
             _ = shutdown.recv() => {
                 debug!("[{}] shutting down backgroud task", taskid);
                 return;
-            }
-            res = tasks_rx.recv() => {
-                if res.is_none() {
-                    return;
-                }
-                let res = res.unwrap();
-                let now = Instant::now();
-                debug!("[{}] scheduling: {:?}, now: {:?}", taskid, &res, &now);
-                when = match when {
-                    Some(v) => {
-                        if res.0 < v && res.0 > now {
-                            debug!("[{}] refreshing task wake up time: {:?}", taskid, &res.0);
-                            expirations.insert((res.0, res.1), (res.2, res.3));
-                            Some(res.0)
-                        } else if res.0 < now {
-                            let _ = shared.state.database.remove(&res.2);
-                            None
-                        } else {
-                            debug!("[{}] inserting tasks: {:?}", taskid, &res.0);
-                            expirations.insert((res.0, res.1), (res.2, res.3));
-                            Some(v)
-                        }
-                    }
-                    None => {
-                        debug!("[{}] refreshing task wake up time: {:?}", taskid, &res.0);
-                        expirations.insert((res.0, res.1), (res.2, res.3));
-                        Some(res.0)
-                    },
-                };
             }
             _ = tokio::time::sleep_until(
                 when.map(|v| v.max(now + Duration::new(10, 0)))
