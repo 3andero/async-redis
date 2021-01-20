@@ -98,7 +98,9 @@ impl Listener {
     #[instrument(skip(self))]
     async fn run(&self) -> Result<()> {
         debug!("Server Started");
+        let mut float_num: u64 = 0;
         loop {
+            float_num += 1;
             let (stream, _) = self.listener.accept().await?;
             debug!("stream accepted: {:?}", &stream);
 
@@ -109,6 +111,7 @@ impl Listener {
                 dispatcher: self.dispatcher.clone(),
                 shutdown_begin: Shutdown::new(self.shutdown_begin.subscribe()),
                 shutdown_complete_tx: self.shutdown_complete_tx.clone(),
+                id: float_num,
             };
 
             tokio::spawn(async move {
@@ -129,11 +132,14 @@ struct Handler {
     dispatcher: Dispatcher,
     shutdown_begin: Shutdown,
     shutdown_complete_tx: mpsc::Sender<()>,
+    id: u64,
 }
 
 impl Handler {
     #[instrument(skip(self))]
     pub async fn run(&mut self) -> Result<()> {
+        let mut sent = vec![false; self.dispatcher.shared.tasks_tx.len()];
+        let (ret_tx, mut ret_rx) = mpsc::channel(1);
         while !self.shutdown_begin.is_shutdown() {
             // debug!("handling: {:?}", self.db.shared.database);
             let opt_frame = tokio::select! {
@@ -160,15 +166,23 @@ impl Handler {
                         .shared
                         .counter
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let (ret_tx, ret_rx) = oneshot::channel();
+
                     cmd.set_nounce(nounce);
                     let db_id = determine_database(calculate_hash(cmd.get_key()));
 
+                    let option_tx = if sent[db_id] {
+                        None
+                    } else {
+                        Some(ret_tx.clone())
+                    };
+
                     self.dispatcher.shared.tasks_tx[db_id]
-                        .send((cmd, ret_tx))
+                        .send((cmd, self.id, option_tx))
                         .await?;
 
-                    ret_rx.await?
+                    sent[db_id] = true;
+
+                    ret_rx.recv().await.unwrap()
                 }
                 Err(e) => match e.downcast_ref::<CommandError>() {
                     Some(e) => Frame::Errors(format!("{}", e).into()),

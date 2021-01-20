@@ -117,11 +117,24 @@ fn get_line(buf: &mut Bytes) -> FrameResult<Bytes> {
     Err(FrameError::Incomplete)
 }
 
-fn get_number(line: &Bytes) -> FrameResult<i64> {
+fn get_number0(line: &Bytes) -> FrameResult<i64> {
     let x = BytesToString!(line, FrameError::Other);
     let res = x
         .parse::<i64>()
         .map_err(|e| FrameError::Other(Error::new(e)))?;
+
+    Ok(res)
+}
+
+fn get_number(line: &Bytes) -> FrameResult<i64> {
+    let mut res = 0;
+    for v in line {
+        if *v >= b'0' && *v <= b'9' {
+            res = res * 10 + ((*v - b'0') as i64);
+        } else {
+            return Err("Not Digit".into());
+        }
+    }
 
     Ok(res)
 }

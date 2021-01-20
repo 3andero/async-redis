@@ -1,16 +1,14 @@
 use crate::{cmd::*, protocol::Frame};
 use bytes::*;
-use std::{
-    collections::{BTreeMap, HashMap},
-};
+use std::collections::{BTreeMap, HashMap};
 use tokio::{
     select,
-    sync::{broadcast, mpsc, oneshot},
+    sync::{broadcast, mpsc},
     time::{Duration, Instant},
 };
 use tracing::debug;
 
-pub type TaskParam = (Command, oneshot::Sender<Frame>);
+pub type TaskParam = (Command, u64, Option<mpsc::Sender<Frame>>);
 
 #[derive(Debug)]
 pub struct Entry {
@@ -63,8 +61,8 @@ pub async fn database_manager(
 ) {
     let mut when: Option<Instant> = None;
     let mut db = DB::new(taskid);
+    let mut registered_handler = BTreeMap::new();
     debug!("[{}] starting backgroud task", taskid);
-
     loop {
         let now = Instant::now();
 
@@ -77,9 +75,14 @@ pub async fn database_manager(
                 if res.is_none() {
                     continue;
                 }
-                let (cmd, ret_tx) = res.unwrap();
+                let (cmd, handler_id, maybe_ret_tx) = res.unwrap();
+                if registered_handler.get(&handler_id).is_none() {
+                    let t = maybe_ret_tx.unwrap();
+                    registered_handler.insert(handler_id, t);
+                }
+                let ret_tx = registered_handler.get(&handler_id).unwrap();
                 debug!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
-                let _ = ret_tx.send(cmd.exec(&mut db));
+                let _ = ret_tx.send(cmd.exec(&mut db)).await;
             }
             _ = tokio::time::sleep_until(
                 when.map(|v| v.max(now + Duration::new(10, 0)))
@@ -100,6 +103,14 @@ pub async fn database_manager(
                         }
                     }
                 }
+
+                if registered_handler.len() > 0 {
+                    registered_handler = registered_handler
+                        .into_iter()
+                        .filter(|(a, b)| !b.is_closed())
+                        .collect();
+                }
+
             }
         }
     }
