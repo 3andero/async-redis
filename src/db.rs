@@ -8,7 +8,11 @@ use tokio::{
 };
 use tracing::debug;
 
-pub type TaskParam = (Command, u64, Option<mpsc::Sender<Frame>>);
+#[derive(Debug)]
+pub enum TaskParam {
+    Task((Command, u64, Option<mpsc::Sender<Frame>>)),
+    Remove(u64),
+}
 
 #[derive(Debug)]
 pub struct Entry {
@@ -63,6 +67,7 @@ pub async fn database_manager(
     let mut db = DB::new(taskid);
     let mut registered_handler = BTreeMap::new();
     debug!("[{}] starting backgroud task", taskid);
+
     loop {
         let now = Instant::now();
 
@@ -75,7 +80,13 @@ pub async fn database_manager(
                 if res.is_none() {
                     continue;
                 }
-                let (cmd, handler_id, maybe_ret_tx) = res.unwrap();
+                let (cmd, handler_id, maybe_ret_tx) = match res.unwrap() {
+                    TaskParam::Remove(handler_id) => {
+                        registered_handler.remove(&handler_id);
+                        continue;
+                    }
+                    TaskParam::Task(v) => v,
+                };
                 if registered_handler.get(&handler_id).is_none() {
                     let t = maybe_ret_tx.unwrap();
                     registered_handler.insert(handler_id, t);

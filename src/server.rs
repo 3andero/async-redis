@@ -1,13 +1,13 @@
 use std::{
-    collections::hash_map::DefaultHasher,
+    collections::{hash_map::DefaultHasher, BTreeMap},
     future::Future,
     hash::{Hash, Hasher},
-    sync::atomic::AtomicU64,
+    sync::atomic::{AtomicU32, AtomicU64},
     sync::Arc,
 };
 
 use core::mem;
-use tokio::{net::TcpListener, spawn, sync::*};
+use tokio::{net::TcpListener, select, spawn, sync::*};
 use tracing::*;
 
 use crate::{cmd::*, connection::*, db::*, protocol::Frame, shutdown::Shutdown, Result};
@@ -94,33 +94,69 @@ pub struct Listener {
     shutdown_complete_tx: mpsc::Sender<()>,
 }
 
+async fn recycle_handler(mut handler: Handler, sender: mpsc::Sender<Handler>) {
+    while let Some((&db_id, &num_used)) = handler.sent.iter().next() {
+        if num_used == 0 {
+            match handler.dispatcher.shared.tasks_tx[db_id]
+                .send(TaskParam::Remove(handler.id))
+                .await
+            {
+                Err(e) => {
+                    error!(
+                        "error occured while recycling handler[{}]: {}",
+                        handler.id, e
+                    );
+                    return;
+                }
+                _ => (),
+            }
+
+            handler.sent.remove(&db_id);
+        }
+    }
+
+    let _ = sender.send(handler).await;
+}
+
 impl Listener {
     #[instrument(skip(self))]
     async fn run(&self) -> Result<()> {
         debug!("Server Started");
         let mut float_num: u64 = 0;
+        let (recycle_tx, recycle_rx) = mpsc::channel(1000);
+        let channel_counter = AtomicU32::new(0);
         loop {
-            float_num += 1;
+            // select! {}
             let (stream, _) = self.listener.accept().await?;
             debug!("stream accepted: {:?}", &stream);
 
             let conn = Connection::new(stream);
 
-            let mut handler = Handler {
-                connection: conn,
-                dispatcher: self.dispatcher.clone(),
-                shutdown_begin: Shutdown::new(self.shutdown_begin.subscribe()),
-                shutdown_complete_tx: self.shutdown_complete_tx.clone(),
-                id: float_num,
-            };
+            if channel_counter > 0 {
+            } else {
+                float_num += 1;
+                let (ret_tx, ret_rx) = mpsc::channel(1);
+                let mut handler = Handler {
+                    connection: conn,
+                    dispatcher: self.dispatcher.clone(),
+                    shutdown_begin: Shutdown::new(self.shutdown_begin.subscribe()),
+                    sent: BTreeMap::new(),
+                    ret_rx,
+                    ret_tx,
+                    shutdown_complete_tx: self.shutdown_complete_tx.clone(),
+                    id: float_num,
+                };
+            }
 
+            let recycle_tx_copy = recycle_tx.clone();
             tokio::spawn(async move {
                 match handler.run().await {
                     Err(e) => {
-                        error!("error occur while handling: {}", e);
+                        error!("error occured while handling: {}", e);
                     }
                     _ => (),
                 }
+                recycle_handler(handler, recycle_tx_copy).await;
             });
         }
     }
@@ -132,6 +168,9 @@ struct Handler {
     dispatcher: Dispatcher,
     shutdown_begin: Shutdown,
     shutdown_complete_tx: mpsc::Sender<()>,
+    sent: BTreeMap<usize, u32>,
+    ret_tx: mpsc::Sender<Frame>,
+    ret_rx: mpsc::Receiver<Frame>,
     id: u64,
 }
 
@@ -177,7 +216,7 @@ impl Handler {
                     };
 
                     self.dispatcher.shared.tasks_tx[db_id]
-                        .send((cmd, self.id, option_tx))
+                        .send(TaskParam::Task((cmd, self.id, option_tx)))
                         .await?;
 
                     sent[db_id] = true;
