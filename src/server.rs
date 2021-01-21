@@ -2,8 +2,9 @@ use std::{
     collections::{hash_map::DefaultHasher, BTreeMap},
     future::Future,
     hash::{Hash, Hasher},
-    sync::atomic::{AtomicU32, AtomicU64},
+    sync::atomic::{AtomicU32, AtomicU64, Ordering::*},
     sync::Arc,
+    unimplemented,
 };
 
 use core::mem;
@@ -124,7 +125,7 @@ impl Listener {
         debug!("Server Started");
         let mut float_num: u64 = 0;
         let (recycle_tx, recycle_rx) = mpsc::channel(1000);
-        let channel_counter = AtomicU32::new(0);
+        let channel_counter = Arc::new(AtomicU32::new(0));
         loop {
             // select! {}
             let (stream, _) = self.listener.accept().await?;
@@ -132,11 +133,21 @@ impl Listener {
 
             let conn = Connection::new(stream);
 
-            if channel_counter > 0 {
+            let mut handler = if channel_counter
+                .fetch_update(Acquire, Release, |v| {
+                    if v > 0 {
+                        Some(v - 1)
+                    } else {
+                        None
+                    }
+                })
+                .is_ok()
+            {
+                unimplemented!()
             } else {
                 float_num += 1;
                 let (ret_tx, ret_rx) = mpsc::channel(1);
-                let mut handler = Handler {
+                Handler {
                     connection: conn,
                     dispatcher: self.dispatcher.clone(),
                     shutdown_begin: Shutdown::new(self.shutdown_begin.subscribe()),
@@ -145,10 +156,11 @@ impl Listener {
                     ret_tx,
                     shutdown_complete_tx: self.shutdown_complete_tx.clone(),
                     id: float_num,
-                };
-            }
+                }
+            };
 
             let recycle_tx_copy = recycle_tx.clone();
+            let channel_counter_copy = channel_counter.clone();
             tokio::spawn(async move {
                 match handler.run().await {
                     Err(e) => {
@@ -157,6 +169,7 @@ impl Listener {
                     _ => (),
                 }
                 recycle_handler(handler, recycle_tx_copy).await;
+                channel_counter_copy.fetch_add(1, Release);
             });
         }
     }
