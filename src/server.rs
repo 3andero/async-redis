@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::DefaultHasher, BTreeMap},
+    collections::{hash_map::DefaultHasher, BTreeMap, HashMap},
     future::Future,
     hash::{Hash, Hasher},
     sync::atomic::{AtomicU32, AtomicU64, Ordering::*},
@@ -8,7 +8,12 @@ use std::{
 };
 
 use core::mem;
-use tokio::{net::TcpListener, select, spawn, sync::*};
+use tokio::{
+    net::TcpListener,
+    select, spawn,
+    sync::*,
+    time::{sleep, Duration, Instant},
+};
 use tracing::*;
 
 use crate::{cmd::*, connection::*, db::*, protocol::Frame, shutdown::Shutdown, Result};
@@ -32,7 +37,6 @@ pub fn determine_database(hash: usize) -> usize {
 #[derive(Debug)]
 pub struct Shared {
     num_partition: usize,
-    // state: State,
     counter: AtomicU64,
     tasks_tx: Vec<mpsc::Sender<TaskParam>>,
 }
@@ -95,28 +99,43 @@ pub struct Listener {
     shutdown_complete_tx: mpsc::Sender<()>,
 }
 
+#[instrument(skip(handler, sender))]
 async fn recycle_handler(mut handler: Handler, sender: mpsc::Sender<Handler>) {
-    while let Some((&db_id, &num_used)) = handler.sent.iter().next() {
+    debug!("[{}]: entered", handler.id);
+    let mut new_sent: HashMap<usize, u32> = HashMap::new();
+    for (&db_id, &num_used) in handler.sent.iter() {
+        debug!("[{}]: checking db({})", handler.id, db_id);
         if num_used == 0 {
-            match handler.dispatcher.shared.tasks_tx[db_id]
-                .send(TaskParam::Remove(handler.id))
-                .await
-            {
-                Err(e) => {
-                    error!(
-                        "error occured while recycling handler[{}]: {}",
-                        handler.id, e
-                    );
-                    return;
+            debug!("[{}]: removing ret_tx from {}", handler.id, db_id);
+            select! {
+                ret = handler.dispatcher.shared.tasks_tx[db_id]
+                .send(TaskParam::Remove(handler.id)) => {
+                    match ret {
+                        Err(e) => {
+                            error!(
+                                "error occured while recycling handler[{}]: {}",
+                                handler.id, e
+                            );
+                            return;
+                        }
+                        _ => (),
+                    }
                 }
-                _ => (),
+                _ = sleep(Duration::new(1, 0)) => {
+                    debug!("[{}]: command timeout", handler.id);
+                }
             }
-
-            handler.sent.remove(&db_id);
+        } else {
+            new_sent.insert(db_id, 0);
         }
     }
 
+    handler.sent = new_sent;
+    debug!("[{}]: send to recycle channel", handler.id);
+    let id = handler.id;
+    handler.connection.close_connection().await;
     let _ = sender.send(handler).await;
+    debug!("[{}]: recycled", id);
 }
 
 impl Listener {
@@ -124,34 +143,56 @@ impl Listener {
     async fn run(&self) -> Result<()> {
         debug!("Server Started");
         let mut float_num: u64 = 0;
-        let (recycle_tx, recycle_rx) = mpsc::channel(1000);
+        let mut conn_id: u64 = 0;
+        let (recycle_tx, mut recycle_rx) = mpsc::channel(1000);
         let channel_counter = Arc::new(AtomicU32::new(0));
         loop {
+            conn_id += 1;
             // select! {}
             let (stream, _) = self.listener.accept().await?;
-            debug!("stream accepted: {:?}", &stream);
+            debug!("<{}>: stream accepted", conn_id);
 
-            let conn = Connection::new(stream);
-
+            let conn = Connection::new(stream, conn_id);
+            debug!(
+                "<{}>: recycle_rx: {:?}, channel_counter: {:?}",
+                conn_id, recycle_rx, channel_counter
+            );
             let mut handler = if channel_counter
-                .fetch_update(Acquire, Release, |v| {
-                    if v > 0 {
-                        Some(v - 1)
-                    } else {
-                        None
-                    }
-                })
+                .fetch_update(SeqCst, Relaxed, |v| if v > 0 { Some(v - 1) } else { None })
                 .is_ok()
             {
-                unimplemented!()
+                select! {
+                    _ = sleep(Duration::new(1, 0)) => {
+                        debug!("<{}>: recv channel timeout", conn_id);
+                        float_num += 1;
+                        let (ret_tx, ret_rx) = mpsc::channel(1);
+                        Handler {
+                            connection: conn,
+                            dispatcher: self.dispatcher.clone(),
+                            shutdown_begin: Shutdown::new(self.shutdown_begin.subscribe()),
+                            sent: HashMap::new(),
+                            ret_rx,
+                            ret_tx,
+                            shutdown_complete_tx: self.shutdown_complete_tx.clone(),
+                            id: float_num,
+                        }
+                    }
+                    ret = recycle_rx.recv() => {
+                        let mut ret: Handler = ret.unwrap();
+                        debug!("<{}>: recv succeed, handler[{}]", conn_id, ret.id);
+                        ret.connection = conn;
+                        ret
+                    },
+                }
             } else {
                 float_num += 1;
+                debug!("<{}>: new handler[{}]", conn_id, float_num);
                 let (ret_tx, ret_rx) = mpsc::channel(1);
                 Handler {
                     connection: conn,
                     dispatcher: self.dispatcher.clone(),
                     shutdown_begin: Shutdown::new(self.shutdown_begin.subscribe()),
-                    sent: BTreeMap::new(),
+                    sent: HashMap::new(),
                     ret_rx,
                     ret_tx,
                     shutdown_complete_tx: self.shutdown_complete_tx.clone(),
@@ -181,7 +222,7 @@ struct Handler {
     dispatcher: Dispatcher,
     shutdown_begin: Shutdown,
     shutdown_complete_tx: mpsc::Sender<()>,
-    sent: BTreeMap<usize, u32>,
+    sent: HashMap<usize, u32>,
     ret_tx: mpsc::Sender<Frame>,
     ret_rx: mpsc::Receiver<Frame>,
     id: u64,
@@ -190,10 +231,7 @@ struct Handler {
 impl Handler {
     #[instrument(skip(self))]
     pub async fn run(&mut self) -> Result<()> {
-        let mut sent = vec![false; self.dispatcher.shared.tasks_tx.len()];
-        let (ret_tx, mut ret_rx) = mpsc::channel(1);
         while !self.shutdown_begin.is_shutdown() {
-            // debug!("handling: {:?}", self.db.shared.database);
             let opt_frame = tokio::select! {
                 _ = self.shutdown_begin.recv() => {
                     return Ok(());
@@ -201,7 +239,7 @@ impl Handler {
                 res = self.connection.read_frame() => res?
             };
 
-            debug!("frame received: {:?}", opt_frame);
+            debug!("[{}]<{}>frame received: {:?}", self.id, self.connection.id, opt_frame);
             let frame = match opt_frame {
                 Some(f) => f,
                 None => {
@@ -212,7 +250,7 @@ impl Handler {
             let command = Command::new(&frame);
             let ret_frame = match command {
                 Ok(mut cmd) => {
-                    debug!("parsed command: {:?}", cmd);
+                    debug!("[{}]<{}>parsed command: {:?}", self.id, self.connection.id, cmd);
                     let nounce = self
                         .dispatcher
                         .shared
@@ -222,19 +260,19 @@ impl Handler {
                     cmd.set_nounce(nounce);
                     let db_id = determine_database(calculate_hash(cmd.get_key()));
 
-                    let option_tx = if sent[db_id] {
+                    let option_tx = if self.sent.get(&db_id).is_some() {
                         None
                     } else {
-                        Some(ret_tx.clone())
+                        Some(self.ret_tx.clone())
                     };
 
                     self.dispatcher.shared.tasks_tx[db_id]
                         .send(TaskParam::Task((cmd, self.id, option_tx)))
                         .await?;
 
-                    sent[db_id] = true;
+                    *self.sent.entry(db_id).or_insert(0) += 1;
 
-                    ret_rx.recv().await.unwrap()
+                    self.ret_rx.recv().await.unwrap()
                 }
                 Err(e) => match e.downcast_ref::<CommandError>() {
                     Some(e) => Frame::Errors(format!("{}", e).into()),
@@ -243,14 +281,14 @@ impl Handler {
                     }
                 },
             };
-            debug!("ret_frame: {:?}", ret_frame);
+            debug!("[{}]<{}>ret_frame: {:?}", self.id, self.connection.id, ret_frame);
             self.connection.write_frame(&ret_frame).await?;
         }
         Ok(())
     }
 }
 
-#[instrument(skip(shutdown_signal))]
+#[instrument(skip(listener, shutdown_signal))]
 pub async fn run(listener: TcpListener, shutdown_signal: impl Future) {
     debug!("Serving Entered");
     let (shutdown_begin_tx, _) = broadcast::channel(1);
