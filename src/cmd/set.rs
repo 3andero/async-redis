@@ -1,9 +1,6 @@
-use std::cmp::Ordering;
-
 use crate::{cmd::*, db::DB};
 use anyhow::Result;
 use tokio::time::{Duration, Instant};
-use tracing::debug;
 #[derive(Debug)]
 pub struct Set {
     key: Bytes,

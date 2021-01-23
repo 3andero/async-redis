@@ -6,7 +6,7 @@ use tokio::{
     sync::{broadcast, mpsc},
     time::{Duration, Instant},
 };
-use tracing::debug;
+use tracing::{debug, info};
 
 #[derive(Debug)]
 pub enum TaskParam {
@@ -61,19 +61,20 @@ impl DB {
 pub async fn database_manager(
     mut tasks_rx: mpsc::Receiver<TaskParam>,
     mut shutdown: broadcast::Receiver<()>,
+    _shutdown_complete_tx: mpsc::Sender<()>,
     taskid: usize,
 ) {
     let mut when: Option<Instant> = None;
     let mut db = DB::new(taskid);
     let mut registered_handler = BTreeMap::new();
-    debug!("[{}] starting backgroud task", taskid);
+    info!("[{}] starting backgroud task", taskid);
 
     loop {
         let now = Instant::now();
 
         select! {
             _ = shutdown.recv() => {
-                debug!("[{}] shutting down backgroud task", taskid);
+                info!("[{}] shutting down backgroud task", taskid);
                 return;
             }
             res = tasks_rx.recv() => {
@@ -118,7 +119,7 @@ pub async fn database_manager(
                 if registered_handler.len() > 0 {
                     registered_handler = registered_handler
                         .into_iter()
-                        .filter(|(a, b)| !b.is_closed())
+                        .filter(|(_, b)| !b.is_closed())
                         .collect();
                 }
 

@@ -17,7 +17,7 @@ impl Connection {
         Self {
             stream: BufWriter::new(stream),
             buf: BytesMut::new(),
-            id
+            id,
         }
     }
 
