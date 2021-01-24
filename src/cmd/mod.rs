@@ -63,7 +63,7 @@ impl<'a> Parser<'a> {
         match frame {
             Frame::Arrays(arr) => Ok(Self {
                 idx: 0,
-                frames: arr,
+                frames: &arr.val,
             }),
             _ => Err(Error::new(ParseError::NotArray)),
         }

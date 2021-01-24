@@ -9,14 +9,21 @@ use tracing::*;
 pub struct Connection {
     stream: BufWriter<TcpStream>,
     buf: BytesMut,
+    pub id: u64,
 }
 
 impl Connection {
-    pub fn new(stream: TcpStream) -> Self {
+    pub fn new(stream: TcpStream, id: u64) -> Self {
         Self {
             stream: BufWriter::new(stream),
             buf: BytesMut::new(),
+            id,
         }
+    }
+
+    pub async fn close_connection(&mut self) {
+        debug!("<{}>closing previous connection", self.id);
+        let _ = self.stream.shutdown().await;
     }
 
     #[instrument(skip(self))]
@@ -24,7 +31,7 @@ impl Connection {
         loop {
             let mut buf = Bytes::from(self.buf.to_vec());
             let origin_len = buf.len();
-            debug!("buffer: {:?}, len: {}", &buf, origin_len);
+            debug!("<{}>buffer: {:?}, len: {}", self.id, &buf, origin_len);
             match decode(&mut buf) {
                 Err(FrameError::Incomplete) => {}
                 Err(FrameError::Other(e)) => {
@@ -50,10 +57,10 @@ impl Connection {
     }
 
     pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
-        let mut frame_byte = encode(frame)?;
-        debug!("encoded frame_byte: {:?}", frame_byte);
+        let frame_byte = encode(frame)?;
+        debug!("<{}>encoded frame_byte: {:?}", self.id, frame_byte);
         self.stream
-            .write_all(&mut frame_byte)
+            .write_all(&frame_byte)
             .await
             .map_err(|e| Box::new(e))?;
 
