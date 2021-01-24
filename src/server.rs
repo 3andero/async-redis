@@ -1,27 +1,19 @@
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::hash_map::DefaultHasher,
     future::Future,
     hash::{Hash, Hasher},
     sync::atomic::{AtomicU32, AtomicU64, Ordering::*},
     sync::Arc,
 };
 
+use bytes::Bytes;
 use core::mem;
-use tokio::{
-    net::TcpListener,
-    select, spawn,
-    sync::*,
-    time::{sleep, Duration},
-};
+use tokio::{net::TcpListener, spawn, sync::*};
 use tracing::*;
 
 use crate::{cmd::*, connection::*, db::*, protocol::Frame, shutdown::Shutdown, Result};
 
-const BUFFERSIZE: usize = 150;
-
-fn num_partitions() -> usize {
-    (num_cpus::get() * 8).next_power_of_two()
-}
+const BUFFERSIZE: usize = 100;
 
 fn calculate_hash<T: Hash>(t: &T) -> usize {
     let mut s = DefaultHasher::new();
@@ -29,24 +21,23 @@ fn calculate_hash<T: Hash>(t: &T) -> usize {
     s.finish() as usize
 }
 
-pub fn determine_database(hash: usize) -> usize {
-    // Leave the high 7 bits for the HashBrown SIMD tag.
-    (hash << 7) >> (mem::size_of::<usize>() * 8 - (num_partitions().trailing_zeros() as usize))
-}
-
 #[derive(Debug)]
 pub struct Dispatcher {
-    num_partition: usize,
+    num_threads: usize,
     counter: AtomicU64,
     tasks_tx: Vec<mpsc::Sender<TaskParam>>,
+    _shift_param: usize,
 }
 
 impl Dispatcher {
-    pub fn new(notify_tx: &broadcast::Sender<()>, shutdown_complete_tx: &mpsc::Sender<()>) -> Self {
-        let num_partition = num_partitions();
-        let mut tasks_tx = Vec::with_capacity(num_partition);
-        let mut tasks_rx = Vec::with_capacity(num_partition);
-        for _ in 0..num_partition {
+    pub fn new(
+        notify_tx: &broadcast::Sender<()>,
+        shutdown_complete_tx: &mpsc::Sender<()>,
+        num_threads: usize,
+    ) -> Self {
+        let mut tasks_tx = Vec::with_capacity(num_threads);
+        let mut tasks_rx = Vec::with_capacity(num_threads);
+        for _ in 0..num_threads {
             let (tx, rx) = mpsc::channel(BUFFERSIZE);
             tasks_tx.push(tx);
             tasks_rx.push(rx);
@@ -60,11 +51,26 @@ impl Dispatcher {
             });
         }
         Self {
-            num_partition,
+            num_threads,
             counter: AtomicU64::new(0),
             tasks_tx,
+            _shift_param: (mem::size_of::<usize>() * 8 - (num_threads.trailing_zeros() as usize)),
         }
     }
+
+    pub fn determine_database(&self, key: &Bytes) -> usize {
+        // Leave the high 7 bits for the HashBrown SIMD tag.
+        (calculate_hash(key) << 7) >> self._shift_param
+    }
+
+    // pub fn determine_database(&self, key: &Bytes) -> usize {
+    //     // Leave the high 7 bits for the HashBrown SIMD tag.
+    //     let mut hash = 0;
+    //     for b in key {
+    //         hash = (hash + *b as usize) % self.num_partition;
+    //     }
+    //     hash
+    // }
 }
 pub struct Listener {
     listener: TcpListener,
@@ -74,42 +80,34 @@ pub struct Listener {
 
     shutdown_complete_rx: mpsc::Receiver<()>,
     shutdown_complete_tx: mpsc::Sender<()>,
+    num_threads: usize,
 }
 
 #[instrument(skip(handler, sender))]
 async fn recycle_handler(mut handler: Handler, sender: mpsc::Sender<Handler>) -> bool {
     debug!("[{}]: entered", handler.id);
-    if handler.sent.len() > 10 {
-        let mut new_sent: HashMap<usize, u32> = HashMap::new();
-        for (&db_id, &num_used) in handler.sent.iter() {
+    handler.age += 1;
+    if handler.age % 10 == 0 {
+        for db_id in 0..handler.sent.len() {
             debug!("[{}]: checking db({})", handler.id, db_id);
-            if num_used == 0 {
+            handler.sent[db_id] = if handler.sent[db_id] == 0 {
                 debug!("[{}]: removing ret_tx from {}", handler.id, db_id);
-                select! {
-                    ret = handler.dispatcher.tasks_tx[db_id]
-                    .send(TaskParam::Remove(handler.id)) => {
-                        match ret {
-                            Err(e) => {
-                                error!(
-                                    "error occured while recycling handler[{}]: {}",
-                                    handler.id, e
-                                );
-                                return false;
-                            }
-                            _ => (),
-                        }
+                match handler.dispatcher.tasks_tx[db_id].try_send(TaskParam::Remove(handler.id)) {
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        error!(
+                            "background task's closed while recycling handler[{}]",
+                            handler.id
+                        );
+                        return false; // no longer need this handler
                     }
-                    _ = sleep(Duration::new(1, 0)) => {
-                        debug!("[{}]: command timeout", handler.id);
-                    }
+                    Ok(_) => -1, // recycled
+                    _ => 0,      // Not yet recycled, just keep it.
                 }
             } else {
-                new_sent.insert(db_id, 0);
-            }
+                0
+            };
         }
-        handler.sent = new_sent;
     }
-
     debug!("[{}]: send to recycle channel", handler.id);
     let id = handler.id;
     handler.connection.close_connection().await;
@@ -153,11 +151,12 @@ impl Listener {
                     connection: conn,
                     dispatcher: self.dispatcher.clone(),
                     shutdown_begin: Shutdown::new(self.shutdown_begin.subscribe()),
-                    sent: HashMap::new(),
+                    sent: vec![-1; self.num_threads],
                     ret_rx,
                     ret_tx,
                     shutdown_complete_tx: self.shutdown_complete_tx.clone(),
                     id: float_num,
+                    age: 0,
                 }
             };
 
@@ -196,10 +195,11 @@ struct Handler {
     dispatcher: Arc<Dispatcher>,
     shutdown_begin: Shutdown,
     shutdown_complete_tx: mpsc::Sender<()>,
-    sent: HashMap<usize, u32>,
+    sent: Vec<i32>,
     ret_tx: mpsc::Sender<Frame>,
     ret_rx: mpsc::Receiver<Frame>,
     id: u64,
+    age: u32,
 }
 
 impl Handler {
@@ -220,7 +220,7 @@ impl Handler {
             let frame = match opt_frame {
                 Some(f) => f,
                 None => {
-                    continue;
+                    return Ok(());
                 }
             };
 
@@ -234,19 +234,19 @@ impl Handler {
                     let nounce = self.dispatcher.counter.fetch_add(1, Relaxed);
 
                     cmd.set_nounce(nounce);
-                    let db_id = determine_database(calculate_hash(cmd.get_key()));
+                    let db_id = self.dispatcher.determine_database(cmd.get_key());
 
-                    let option_tx = if self.sent.get(&db_id).is_some() {
-                        None
-                    } else {
+                    let option_tx = if self.sent[db_id] == -1 {
                         Some(self.ret_tx.clone())
+                    } else {
+                        None
                     };
 
                     self.dispatcher.tasks_tx[db_id]
                         .send(TaskParam::Task((cmd, self.id, option_tx)))
                         .await?;
 
-                    *self.sent.entry(db_id).or_insert(0) += 1;
+                    self.sent[db_id] = std::cmp::max(self.sent[db_id] + 1, 1);
 
                     self.ret_rx.recv().await.unwrap()
                 }
@@ -268,7 +268,7 @@ impl Handler {
 }
 
 #[instrument(skip(listener, shutdown_signal))]
-pub async fn run(listener: TcpListener, shutdown_signal: impl Future) {
+pub async fn run(listener: TcpListener, shutdown_signal: impl Future, num_threads: usize) {
     info!("Service Starting");
     let (shutdown_begin_tx, _) = broadcast::channel(1);
 
@@ -276,10 +276,15 @@ pub async fn run(listener: TcpListener, shutdown_signal: impl Future) {
 
     let server = Listener {
         listener,
-        dispatcher: Arc::new(Dispatcher::new(&shutdown_begin_tx, &shutdown_complete_tx)),
+        dispatcher: Arc::new(Dispatcher::new(
+            &shutdown_begin_tx,
+            &shutdown_complete_tx,
+            num_threads,
+        )),
         shutdown_begin: shutdown_begin_tx,
         shutdown_complete_rx,
         shutdown_complete_tx,
+        num_threads,
     };
 
     tokio::select! {

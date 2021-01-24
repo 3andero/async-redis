@@ -57,10 +57,10 @@ impl Connection {
     }
 
     pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
-        let mut frame_byte = encode(frame)?;
+        let frame_byte = encode(frame)?;
         debug!("<{}>encoded frame_byte: {:?}", self.id, frame_byte);
         self.stream
-            .write_all(&mut frame_byte)
+            .write_all(&frame_byte)
             .await
             .map_err(|e| Box::new(e))?;
 

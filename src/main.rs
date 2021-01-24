@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::env;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 mod cmd;
@@ -9,17 +8,44 @@ mod protocol;
 mod server;
 mod shutdown;
 mod utils;
+use clap::{App, Arg};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let addr = env::args()
-        .skip(1)
-        .next()
-        .unwrap_or("127.0.0.1:7777".to_owned());
+    let matches = App::new("async-redis")
+        .version("0.6.0")
+        .arg(
+            Arg::with_name("port")
+                .short("p")
+                .long("port")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("thread")
+                .short("t")
+                .long("thread")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("log-level")
+                .short("l")
+                .long("log-level")
+                .takes_value(true),
+        )
+        .get_matches();
 
-    let loglevel = env::args()
-        .skip(2)
-        .next()
+    let addr = "127.0.0.1:".to_owned() + matches.value_of("port").unwrap_or("7777");
+
+    let thread_num = matches
+        .value_of("thread")
+        .map(|v| match v.parse::<usize>() {
+            Ok(v) => v,
+            Err(_) => panic!("not a number"),
+        })
+        .unwrap_or(num_cpus::get());
+
+    let loglevel = matches
+        .value_of("log-level")
         .map_or(tracing::Level::INFO, |f| match &f.to_lowercase()[..] {
             "info" => tracing::Level::INFO,
             "debug" => tracing::Level::DEBUG,
@@ -36,6 +62,6 @@ async fn main() -> Result<()> {
     let addr = addr.parse::<SocketAddr>()?;
     let listener = TcpListener::bind(&addr).await?;
 
-    server::run(listener, tokio::signal::ctrl_c()).await;
+    server::run(listener, tokio::signal::ctrl_c(), thread_num).await;
     Ok(())
 }

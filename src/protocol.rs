@@ -1,8 +1,23 @@
+use crate::utils::{integer_to_bytes, len_of};
 use anyhow::{anyhow, Error, Result};
 use bytes::*;
 use tracing::*;
 
-use crate::BytesToString;
+// use crate::BytesToString;
+#[derive(Debug)]
+pub struct FrameArrays {
+    pub val: Vec<Frame>,
+    _encode_length: usize,
+}
+
+impl FrameArrays {
+    pub fn new(val: Vec<Frame>) -> Self {
+        Self {
+            _encode_length: 3 + len_of(val.len()) + val.iter().fold(0, |res, f| res + f.len()),
+            val,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum Frame {
@@ -11,7 +26,7 @@ pub enum Frame {
     Integers(i64),
     BulkStrings(Bytes),
     Null,
-    Arrays(Vec<Frame>),
+    Arrays(FrameArrays),
     Ok,
 }
 
@@ -20,6 +35,19 @@ impl From<Bytes> for Frame {
         return Frame::BulkStrings(bt);
     }
 }
+
+impl Frame {
+    fn len(&self) -> usize {
+        match self {
+            Frame::Ok | Frame::Null => 5,
+            Frame::SimpleString(v) | Frame::Errors(v) => v.len() + 3,
+            Frame::BulkStrings(v) => 5 + v.len() + len_of(v.len()),
+            &Frame::Integers(v) => len_of(v) + 3,
+            Frame::Arrays(v) => v._encode_length,
+        }
+    }
+}
+
 #[derive(Debug, err_derive::Error)]
 pub enum FrameError {
     #[error(display = "Incomplete")]
@@ -46,6 +74,12 @@ type FrameResult<T> = std::result::Result<T, FrameError>;
 
 const NILFRAME: &'static [u8] = b"$-1\r\n";
 const OKFRAME: &'static [u8] = b"+OK\r\n";
+const SIMPLE_STRING_MARK: &'static [u8] = b"+";
+const ERROR_MARK: &'static [u8] = b"-";
+const BULK_STRING_MARK: &'static [u8] = b"$";
+const INTEGER_MARK: &'static [u8] = b":";
+const ARRAY_MARK: &'static [u8] = b"*";
+const DLEM_MARK: &'static [u8] = b"\r\n";
 
 pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
     if buf.len() == 0 {
@@ -63,12 +97,12 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
         }
         b':' => {
             let next_line = get_line(buf)?;
-            let res = get_number(&next_line)?;
+            let res = get_integer(&next_line)?;
             Ok(Frame::Integers(res))
         }
         b'$' => {
             let mut next_line = get_line(buf)?;
-            let len = get_number(&next_line)?;
+            let len = get_integer(&next_line)?;
             let res = if len == -1 {
                 Frame::Null
             } else {
@@ -82,7 +116,7 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
         }
         b'*' => {
             let next_line = get_line(buf)?;
-            let len = get_number(&next_line)?;
+            let len = get_integer(&next_line)?;
             let res = if len == -1 {
                 Frame::Null
             } else {
@@ -90,7 +124,7 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
                 for _ in 0..len as usize {
                     frame_arr.push(decode(buf)?)
                 }
-                Frame::Arrays(frame_arr)
+                Frame::Arrays(FrameArrays::new(frame_arr))
             };
             Ok(res)
         }
@@ -117,7 +151,14 @@ fn get_line(buf: &mut Bytes) -> FrameResult<Bytes> {
     Err(FrameError::Incomplete)
 }
 
-fn get_number(line: &Bytes) -> FrameResult<i64> {
+fn get_integer(line: &Bytes) -> FrameResult<i64> {
+    let (neg, line) = if line.len() == 0 {
+        return Err("Not Digit".into());
+    } else if line[0] == b'-' {
+        (true, &line[1..])
+    } else {
+        (false, &line[..])
+    };
     let mut res = 0;
     for v in line {
         if *v >= b'0' && *v <= b'9' {
@@ -127,7 +168,48 @@ fn get_number(line: &Bytes) -> FrameResult<i64> {
         }
     }
 
-    Ok(res)
+    Ok(if neg { -res } else { res })
+}
+
+fn encode_iter(frame: &Frame, buf: &mut BytesMut) {
+    match frame {
+        Frame::SimpleString(msg) => {
+            buf.put_slice(SIMPLE_STRING_MARK);
+            buf.put_slice(msg);
+            buf.put_slice(DLEM_MARK);
+        }
+        Frame::Errors(msg) => {
+            buf.put_slice(ERROR_MARK);
+            buf.put_slice(msg);
+            buf.put_slice(DLEM_MARK);
+        }
+        &Frame::Integers(num) => {
+            buf.put_slice(INTEGER_MARK);
+            buf.put_slice(&integer_to_bytes(num)[..]);
+            buf.put_slice(DLEM_MARK);
+        }
+        Frame::BulkStrings(msg) => {
+            buf.put_slice(BULK_STRING_MARK);
+            buf.put_slice(&integer_to_bytes(msg.len())[..]);
+            buf.put_slice(DLEM_MARK);
+            buf.put_slice(msg);
+            buf.put_slice(DLEM_MARK);
+        }
+        Frame::Arrays(arr) => {
+            buf.put_slice(ARRAY_MARK);
+            buf.put_slice(&integer_to_bytes(arr.val.len())[..]);
+            buf.put_slice(DLEM_MARK);
+            for f in &arr.val {
+                encode_iter(&f, buf);
+            }
+        }
+        Frame::Null => {
+            buf.put_slice(NILFRAME);
+        }
+        Frame::Ok => {
+            buf.put_slice(OKFRAME);
+        }
+    };
 }
 
 pub fn encode(frame: &Frame) -> Result<Bytes> {
@@ -141,29 +223,9 @@ pub fn encode(frame: &Frame) -> Result<Bytes> {
         _ => (),
     }
 
-    let msg_encoded = match frame {
-        Frame::SimpleString(msg) => {
-            format!("+{}\r\n", BytesToString!(msg))
-        }
-        Frame::Errors(msg) => {
-            format!("-{}\r\n", BytesToString!(msg))
-        }
-        Frame::Integers(num) => {
-            format!(":{}\r\n", num)
-        }
-        Frame::BulkStrings(msg) => {
-            format!("${}\r\n{}\r\n", msg.len(), BytesToString!(msg))
-        }
-        Frame::Arrays(arr) => {
-            let mut res = String::with_capacity(arr.len() * 8);
-            for f in arr.iter() {
-                res += BytesToString!(encode(f)?).as_ref();
-            }
-            format!("*{}\r\n{}", arr.len(), res)
-        }
-        _ => unimplemented!(),
-    };
-    Ok(Bytes::from(msg_encoded))
+    let mut buf = BytesMut::with_capacity(frame.len());
+    encode_iter(frame, &mut buf);
+    Ok(buf.freeze())
 }
 
 #[macro_export]
@@ -221,7 +283,9 @@ mod tests {
             "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
             "*3\r\n:1\r\n:2\r\n:3\r\n",
             "*-1\r\n",
+            "$-1\r\n",
             "*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n",
+            "*12\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n",
             "$6\r\nfoobar\r\n",
             "+OK\r\n",
             "$3\r\nfoobar\r\n",

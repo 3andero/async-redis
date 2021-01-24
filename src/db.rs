@@ -75,6 +75,7 @@ pub async fn database_manager(
         select! {
             _ = shutdown.recv() => {
                 info!("[{}] shutting down backgroud task", taskid);
+                drop(db);
                 return;
             }
             res = tasks_rx.recv() => {
@@ -98,7 +99,7 @@ pub async fn database_manager(
             }
             _ = tokio::time::sleep_until(
                 when.map(|v| v.max(now + Duration::new(10, 0)))
-                    .unwrap_or(now + Duration::new(600, 0)),
+                    .unwrap_or(now + Duration::new(30, 0)),
             ) => {
                 debug!("[{}] task waked up, expirations: {:?}", taskid, db.expiration);
                 when = None;
