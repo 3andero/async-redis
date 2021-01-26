@@ -18,6 +18,10 @@ tracing-futures = "0.2.4"
 tracing-subscriber = "0.2.15"
 anyhow = { version = "1.0" }
 num_cpus = "1.13.0"
-crossfire = "0.1"
+# crossfire = "0.1"
 num-traits = "0.2.14"
 clap = "2.33.3"
+flume = "0.10.1"
+
+[profile.release]
+debug = false

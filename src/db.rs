@@ -3,14 +3,14 @@ use bytes::*;
 use std::collections::{BTreeMap, HashMap};
 use tokio::{
     select,
-    sync::{broadcast, mpsc},
+    sync::{broadcast},
     time::{Duration, Instant},
 };
 use tracing::{debug, info};
 
 #[derive(Debug)]
 pub enum TaskParam {
-    Task((Command, u64, Option<mpsc::Sender<Frame>>)),
+    Task((Command, u64, Option<flume::Sender<Frame>>)),
     Remove(u64),
 }
 
@@ -59,9 +59,9 @@ impl DB {
 }
 
 pub async fn database_manager(
-    mut tasks_rx: mpsc::Receiver<TaskParam>,
+    mut tasks_rx: flume::Receiver<TaskParam>,
     mut shutdown: broadcast::Receiver<()>,
-    _shutdown_complete_tx: mpsc::Sender<()>,
+    _shutdown_complete_tx: flume::Sender<()>,
     taskid: usize,
 ) {
     let mut when: Option<Instant> = None;
@@ -71,15 +71,15 @@ pub async fn database_manager(
 
     loop {
         let now = Instant::now();
-
         select! {
             _ = shutdown.recv() => {
                 info!("[{}] shutting down backgroud task", taskid);
                 drop(db);
                 return;
             }
-            res = tasks_rx.recv() => {
-                if res.is_none() {
+            res = tasks_rx.recv_async() => {
+                debug!("[{}] task received: {:?}", taskid, &res);
+                if res.is_err() {
                     continue;
                 }
                 let (cmd, handler_id, maybe_ret_tx) = match res.unwrap() {
@@ -95,7 +95,7 @@ pub async fn database_manager(
                 }
                 let ret_tx = registered_handler.get(&handler_id).unwrap();
                 debug!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
-                let _ = ret_tx.send(cmd.exec(&mut db)).await;
+                let _ = ret_tx.send_async(cmd.exec(&mut db)).await;
             }
             _ = tokio::time::sleep_until(
                 when.map(|v| v.max(now + Duration::new(10, 0)))
@@ -120,7 +120,7 @@ pub async fn database_manager(
                 if registered_handler.len() > 0 {
                     registered_handler = registered_handler
                         .into_iter()
-                        .filter(|(_, b)| !b.is_closed())
+                        .filter(|(_, b)| !b.is_disconnected())
                         .collect();
                 }
 

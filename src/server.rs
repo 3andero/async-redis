@@ -25,20 +25,20 @@ fn calculate_hash<T: Hash>(t: &T) -> usize {
 pub struct Dispatcher {
     num_threads: usize,
     counter: AtomicU64,
-    tasks_tx: Vec<mpsc::Sender<TaskParam>>,
+    tasks_tx: Vec<flume::Sender<TaskParam>>,
     _shift_param: usize,
 }
 
 impl Dispatcher {
     pub fn new(
         notify_tx: &broadcast::Sender<()>,
-        shutdown_complete_tx: &mpsc::Sender<()>,
+        shutdown_complete_tx: &flume::Sender<()>,
         num_threads: usize,
     ) -> Self {
         let mut tasks_tx = Vec::with_capacity(num_threads);
         let mut tasks_rx = Vec::with_capacity(num_threads);
         for _ in 0..num_threads {
-            let (tx, rx) = mpsc::channel(BUFFERSIZE);
+            let (tx, rx) = flume::bounded(BUFFERSIZE);
             tasks_tx.push(tx);
             tasks_rx.push(rx);
         }
@@ -78,13 +78,13 @@ pub struct Listener {
 
     shutdown_begin: broadcast::Sender<()>,
 
-    shutdown_complete_rx: mpsc::Receiver<()>,
-    shutdown_complete_tx: mpsc::Sender<()>,
+    shutdown_complete_rx: flume::Receiver<()>,
+    shutdown_complete_tx: flume::Sender<()>,
     num_threads: usize,
 }
 
 #[instrument(skip(handler, sender))]
-async fn recycle_handler(mut handler: Handler, sender: mpsc::Sender<Handler>) -> bool {
+async fn recycle_handler(mut handler: Handler, sender: flume::Sender<Handler>) -> bool {
     debug!("[{}]: entered", handler.id);
     handler.age += 1;
     if handler.age % 10 == 0 {
@@ -93,7 +93,7 @@ async fn recycle_handler(mut handler: Handler, sender: mpsc::Sender<Handler>) ->
             handler.sent[db_id] = if handler.sent[db_id] == 0 {
                 debug!("[{}]: removing ret_tx from {}", handler.id, db_id);
                 match handler.dispatcher.tasks_tx[db_id].try_send(TaskParam::Remove(handler.id)) {
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                    Err(flume::TrySendError::Disconnected(_)) => {
                         error!(
                             "background task's closed while recycling handler[{}]",
                             handler.id
@@ -121,7 +121,7 @@ impl Listener {
     async fn run(&self) -> Result<()> {
         let mut float_num: u64 = 0;
         let mut conn_id: u64 = 0;
-        let (recycle_tx, mut recycle_rx) = mpsc::channel(1000);
+        let (recycle_tx, mut recycle_rx) = flume::bounded(1000);
         let channel_counter = Arc::new(AtomicU32::new(0));
         info!("Server Started");
         loop {
@@ -139,14 +139,14 @@ impl Listener {
                 .fetch_update(SeqCst, Relaxed, |v| if v > 0 { Some(v - 1) } else { None })
                 .is_ok()
             {
-                let mut ret: Handler = recycle_rx.recv().await.unwrap();
+                let mut ret: Handler = recycle_rx.recv_async().await.unwrap();
                 debug!("<{}>: recv succeed, handler[{}]", conn_id, ret.id);
                 ret.connection = conn;
                 ret
             } else {
                 float_num += 1;
                 debug!("<{}>: new handler[{}]", conn_id, float_num);
-                let (ret_tx, ret_rx) = mpsc::channel(1);
+                let (ret_tx, ret_rx) = flume::bounded(1);
                 Handler {
                     connection: conn,
                     dispatcher: self.dispatcher.clone(),
@@ -194,10 +194,10 @@ struct Handler {
     connection: Connection,
     dispatcher: Arc<Dispatcher>,
     shutdown_begin: Shutdown,
-    shutdown_complete_tx: mpsc::Sender<()>,
+    shutdown_complete_tx: flume::Sender<()>,
     sent: Vec<i32>,
-    ret_tx: mpsc::Sender<Frame>,
-    ret_rx: mpsc::Receiver<Frame>,
+    ret_tx: flume::Sender<Frame>,
+    ret_rx: flume::Receiver<Frame>,
     id: u64,
     age: u32,
 }
@@ -243,12 +243,12 @@ impl Handler {
                     };
 
                     self.dispatcher.tasks_tx[db_id]
-                        .send(TaskParam::Task((cmd, self.id, option_tx)))
+                        .send_async(TaskParam::Task((cmd, self.id, option_tx)))
                         .await?;
 
                     self.sent[db_id] = std::cmp::max(self.sent[db_id] + 1, 1);
 
-                    self.ret_rx.recv().await.unwrap()
+                    self.ret_rx.recv_async().await.unwrap()
                 }
                 Err(e) => match e.downcast_ref::<CommandError>() {
                     Some(e) => Frame::Errors(format!("{}", e).into()),
@@ -272,7 +272,7 @@ pub async fn run(listener: TcpListener, shutdown_signal: impl Future, num_thread
     info!("Service Starting");
     let (shutdown_begin_tx, _) = broadcast::channel(1);
 
-    let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
+    let (shutdown_complete_tx, shutdown_complete_rx) = flume::bounded(1);
 
     let server = Listener {
         listener,
@@ -312,6 +312,6 @@ pub async fn run(listener: TcpListener, shutdown_signal: impl Future, num_thread
 
     drop(shutdown_complete_tx);
 
-    let _ = shutdown_complete_rx.recv().await;
+    let _ = shutdown_complete_rx.recv_async().await;
     info!("Shutdown Complete");
 }
