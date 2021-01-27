@@ -32,13 +32,16 @@ impl Connection {
             let mut buf = Bytes::from(self.buf.to_vec());
             let origin_len = buf.len();
             debug!("<{}>buffer: {:?}, len: {}", self.id, &buf, origin_len);
-            match decode(&mut buf) {
+            match decode::decode(&mut buf) {
                 Err(FrameError::Incomplete) => {}
                 Err(FrameError::Other(e)) => {
                     return Err(e);
                 }
                 Err(FrameError::NotImplemented) => {
                     return Err(Error::new(FrameError::NotImplemented));
+                }
+                Err(FrameError::Invalid) => {
+                    return Err(Error::new(FrameError::Invalid));
                 }
                 Ok(frame) => {
                     self.buf.advance(origin_len - buf.len());
@@ -57,7 +60,7 @@ impl Connection {
     }
 
     pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
-        let frame_byte = encode(frame)?;
+        let frame_byte = encode::encode(frame)?;
         debug!("<{}>encoded frame_byte: {:?}", self.id, frame_byte);
         self.stream
             .write_all(&frame_byte)

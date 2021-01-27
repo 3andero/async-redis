@@ -1,0 +1,155 @@
+use crate::utils::{integer_to_bytes, len_of};
+use anyhow::{anyhow, Error, Result};
+use bytes::*;
+use tracing::*;
+
+pub mod encode;
+pub mod decode;
+mod intermediate_parsing;
+
+#[derive(Debug)]
+pub struct FrameArrays {
+    pub val: Vec<Frame>,
+    _encode_length: usize,
+}
+
+impl FrameArrays {
+    pub fn new(val: Vec<Frame>) -> Self {
+        Self {
+            _encode_length: 3 + len_of(val.len()) + val.iter().fold(0, |res, f| res + f.len()),
+            val,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Frame {
+    SimpleString(Bytes),
+    Errors(Bytes),
+    Integers(i64),
+    BulkStrings(Bytes),
+    Null,
+    Arrays(FrameArrays),
+    Ok,
+}
+
+impl From<Bytes> for Frame {
+    fn from(bt: Bytes) -> Frame {
+        return Frame::BulkStrings(bt);
+    }
+}
+
+impl Frame {
+    fn len(&self) -> usize {
+        match self {
+            Frame::Ok | Frame::Null => 5,
+            Frame::SimpleString(v) | Frame::Errors(v) => v.len() + 3,
+            Frame::BulkStrings(v) => 5 + v.len() + len_of(v.len()),
+            &Frame::Integers(v) => len_of(v) + 3,
+            Frame::Arrays(v) => v._encode_length,
+        }
+    }
+}
+
+#[derive(Debug, err_derive::Error)]
+pub enum FrameError {
+    #[error(display = "Incomplete")]
+    Incomplete,
+    #[error(display = "Not Implemented")]
+    NotImplemented,
+    #[error(display = "Invalid")]
+    Invalid,
+    #[error(display = "{}", _0)]
+    Other(Error),
+}
+
+impl From<String> for FrameError {
+    fn from(msg: String) -> FrameError {
+        FrameError::Other(anyhow!(msg))
+    }
+}
+
+impl From<&str> for FrameError {
+    fn from(msg: &str) -> FrameError {
+        msg.to_string().into()
+    }
+}
+
+type FrameResult<T> = std::result::Result<T, FrameError>;
+
+const NILFRAME: &'static [u8] = b"$-1\r\n";
+const OKFRAME: &'static [u8] = b"+OK\r\n";
+const SIMPLE_STRING_MARK: u8 = b'+';
+const ERROR_MARK: u8 = b'-';
+const BULK_STRING_MARK: u8 = b'$';
+const INTEGER_MARK: u8 = b':';
+const ARRAY_MARK: u8 = b'*';
+const DLEM_MARK: &'static [u8] = b"\r\n";
+
+#[macro_export]
+macro_rules! FrameTests {
+    (Display $($cmd:expr),*) => {
+        let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
+        for param in params.iter_mut() {
+            let res = decode(&mut param.clone());
+            println!("{:?} => {:?}", param, res);
+        }
+    };
+    (Encode $($cmd:expr),*) => {
+        let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
+        for param in params.iter_mut() {
+            let mut _p = param.clone();
+            let mut err_msg = String::new();
+            let res = match decode(&mut _p) {
+                Ok(v) => v,
+                Err(e) => {
+                    err_msg = format!("{:?}", e);
+                    Frame::Null
+                }
+            };
+            let decoded = encode(&res).unwrap();
+            let equal = decoded.to_vec() == param.to_vec();
+            println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", param, _p, res, decoded, err_msg, equal);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::protocol::*;
+    use encode::*;
+    use decode::*;
+    #[test]
+    fn displays_test() {
+        FrameTests!(Display
+            "*0\r\n",
+            "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
+            "*3\r\n:1\r\n:2\r\n:3\r\n",
+            "*-1\r\n",
+            "*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n",
+            "$6\r\nfoobar\r\n",
+            "+OK\r\n",
+            "$3\r\nfoobar\r\n",
+            "$6\r\nfoar\r\n",
+            "$6\r\rfoobar\r\n"
+        );
+    }
+
+    #[test]
+    fn encode_test() {
+        FrameTests!(Encode
+            "*0\r\n",
+            "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
+            "*3\r\n:1\r\n:2\r\n:3\r\n",
+            "*-1\r\n",
+            "$-1\r\n",
+            "*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n",
+            "*12\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n",
+            "$6\r\nfoobar\r\n",
+            "+OK\r\n",
+            "$3\r\nfoobar\r\n",
+            "$6\r\nfoar\r\n",
+            "$6\r\rfoobar\r\n"
+        );
+    }
+}
