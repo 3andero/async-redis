@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn displays_parser() {
         FrameTests!(DisplayIntermediateParser
-            // "*0\r\n",
+            "*0\r\n",
             "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
             "*3\r\n:1\r\n:2\r\n:3\r\n",
             "*-1\r\n",
