@@ -32,22 +32,25 @@ fn encode_iter(frame: &Frame, buf: &mut BytesMut) {
                 encode_iter(&f, buf);
             }
         }
-        Frame::Null => {
-            buf.put_slice(NILFRAME);
+        Frame::NullString => {
+            buf.put_slice(NIL_STRING_FRAME);
+        }
+        Frame::NullArray => {
+            buf.put_slice(NIL_ARRAY_FRAME);
         }
         Frame::Ok => {
-            buf.put_slice(OKFRAME);
+            buf.put_slice(OK_FRAME);
         }
     };
 }
 
 pub fn encode(frame: &Frame) -> Result<Bytes> {
     match frame {
-        Frame::Null => {
-            return Ok(Bytes::from(NILFRAME));
+        Frame::NullString => {
+            return Ok(Bytes::from(NIL_STRING_FRAME));
         }
         Frame::Ok => {
-            return Ok(Bytes::from(OKFRAME));
+            return Ok(Bytes::from(OK_FRAME));
         }
         _ => (),
     }

@@ -1,26 +1,20 @@
 use crate::protocol::*;
 use bytes::Bytes;
-use std::io::Cursor;
+use num_traits::ops::inv;
+use std::{io::Cursor, unimplemented};
 
 #[derive(Debug)]
-enum TokenData {
-    Bytes(Bytes),
-    TokenArr(Vec<IntermediateToken>),
-    Integer(i64),
-}
-
-#[derive(Debug)]
-struct IntermediateToken {
+pub struct IntermediateToken {
     token_type: u8,
     expected_len: Option<usize>,
     recognized_len: Option<u64>,
     is_recognized: bool,
     is_complete: bool,
-    data: Option<TokenData>,
+    data: Option<Frame>,
 }
 
 impl IntermediateToken {
-    fn new(token_type: u8) -> Self {
+    pub fn new(token_type: u8) -> Self {
         Self {
             token_type,
             expected_len: None,
@@ -31,10 +25,10 @@ impl IntermediateToken {
         }
     }
 
-    fn raw_bytes_remain(&self) -> bool {
+    pub fn raw_bytes_remain(&self) -> bool {
         self.is_recognized
     }
-    fn token_remain(&self) -> bool {
+    pub fn token_remain(&self) -> bool {
         self.is_complete
     }
 
@@ -77,10 +71,15 @@ impl IntermediateToken {
         }
     }
 
-    fn consume_raw_bytes(&mut self, buf: &mut BytesMut) -> FrameResult<()> {
+    pub fn consume_raw_bytes(&mut self, buf: &mut BytesMut) -> FrameResult<()> {
         match self.token_type {
-            SIMPLE_STRING_MARK | ERROR_MARK => {
-                self.data = Some(TokenData::Bytes(self.read_line(buf)?));
+            SIMPLE_STRING_MARK => {
+                self.data = Some(Frame::SimpleString(self.read_line(buf)?));
+                self.is_recognized = true;
+                self.is_complete = true;
+            }
+            ERROR_MARK => {
+                self.data = Some(Frame::Errors(self.read_line(buf)?));
                 self.is_recognized = true;
                 self.is_complete = true;
             }
@@ -91,41 +90,70 @@ impl IntermediateToken {
                     if maybe_len < 0 {
                         self.is_recognized = true;
                         self.is_complete = true;
+                        self.data = Some(Frame::NullString);
+                        return Ok(());
                     } else {
                         self.expected_len = Some(maybe_len as usize);
                     }
                 }
 
                 let span = self.expected_len.unwrap();
-                self.data = Some(TokenData::Bytes(self.read_span(span, buf)?));
+                self.data = Some(Frame::BulkStrings(self.read_span(span, buf)?));
                 self.is_complete = true;
                 self.is_recognized = true;
             }
             INTEGER_MARK => {
                 let next_line = self.read_line(buf)?;
-                self.data = Some(TokenData::Integer(get_integer(&next_line)?));
+                self.data = Some(Frame::Integers(get_integer(&next_line)?));
                 self.is_complete = true;
                 self.is_recognized = true;
             }
             ARRAY_MARK => {
                 let next_line = self.read_line(buf)?;
-                self.data = Some(TokenData::Integer(get_integer(&next_line)?));
-                self.is_recognized = true;
+                let maybe_len = get_integer(&next_line)?;
+                if maybe_len < 0 {
+                    self.is_recognized = true;
+                    self.is_complete = true;
+                    self.data = Some(Frame::NullArray);
+                    return Ok(());
+                } else {
+                    self.expected_len = Some(maybe_len as usize);
+                    self.is_recognized = true;
+                    self.data = Some(Frame::Arrays(FrameArrays {
+                        val: Vec::with_capacity(4),
+                        _encode_length: 0,
+                    }));
+                }
             }
             _ => unimplemented!(),
         }
 
         Ok(())
     }
-    // fn consume_token(&mut self, token: IntermediateToken) -> FrameResult<()>;
-    // fn into(self) -> Frame;
+
+    pub fn consume_token(&mut self, token: IntermediateToken) -> FrameResult<()> {
+        let token = token.into()?;
+        match (self.token_type, self.data.as_mut()) {
+            (ARRAY_MARK, Some(Frame::Arrays(FrameArrays { val, .. }))) => {
+                val.push(token);
+            }
+            _ => {
+                return Err(FrameError::Invalid);
+            }
+        }
+        Ok(())
+    }
+
+    fn into(self) -> FrameResult<Frame> {
+        return self.data.ok_or_else(|| FrameError::Invalid);
+    }
 }
 
 fn get_line<'a>(cursor: &mut Cursor<&'a [u8]>) -> FrameResult<&'a [u8]> {
     unimplemented!()
 }
 
-fn get_integer(line: &Bytes) -> FrameResult<i64> {
+pub fn get_integer(line: &Bytes) -> FrameResult<i64> {
     let (neg, line) = if line.len() == 0 {
         return Err("Not Digit".into());
     } else if line[0] == b'-' {

@@ -2,8 +2,20 @@ use crate::protocol::*;
 use intermediate_parsing::*;
 
 #[derive(Debug)]
-struct IntermediateParser {
+struct IntermediateParser<'a> {
+    token_stack: Vec<IntermediateToken>,
+    buf: &'a BytesMut
+}
 
+impl<'a> IntermediateParser<'a> {
+    fn new(buf: &'a BytesMut) -> Self {
+        Self {
+            token_stack: Vec::with_capacity(4),
+            buf
+        }
+    }
+
+    fn parse() -> 
 }
 
 pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
@@ -29,7 +41,7 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
             let mut next_line = get_line(buf)?;
             let len = get_integer(&next_line)?;
             let res = if len == -1 {
-                Frame::Null
+                Frame::NullString
             } else {
                 next_line = get_line(buf)?;
                 if next_line.len() != len as usize {
@@ -43,7 +55,7 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
             let next_line = get_line(buf)?;
             let len = get_integer(&next_line)?;
             let res = if len == -1 {
-                Frame::Null
+                Frame::NullString
             } else {
                 let mut frame_arr = Vec::<Frame>::new();
                 for _ in 0..len as usize {

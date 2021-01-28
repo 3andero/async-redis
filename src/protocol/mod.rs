@@ -3,8 +3,8 @@ use anyhow::{anyhow, Error, Result};
 use bytes::*;
 use tracing::*;
 
-pub mod encode;
 pub mod decode;
+pub mod encode;
 mod intermediate_parsing;
 
 #[derive(Debug)]
@@ -28,9 +28,10 @@ pub enum Frame {
     Errors(Bytes),
     Integers(i64),
     BulkStrings(Bytes),
-    Null,
+    NullString,
     Arrays(FrameArrays),
     Ok,
+    NullArray,
 }
 
 impl From<Bytes> for Frame {
@@ -42,7 +43,7 @@ impl From<Bytes> for Frame {
 impl Frame {
     fn len(&self) -> usize {
         match self {
-            Frame::Ok | Frame::Null => 5,
+            Frame::Ok | Frame::NullString | Frame::NullArray => 5,
             Frame::SimpleString(v) | Frame::Errors(v) => v.len() + 3,
             Frame::BulkStrings(v) => 5 + v.len() + len_of(v.len()),
             &Frame::Integers(v) => len_of(v) + 3,
@@ -77,8 +78,9 @@ impl From<&str> for FrameError {
 
 type FrameResult<T> = std::result::Result<T, FrameError>;
 
-const NILFRAME: &'static [u8] = b"$-1\r\n";
-const OKFRAME: &'static [u8] = b"+OK\r\n";
+const NIL_STRING_FRAME: &'static [u8] = b"$-1\r\n";
+const NIL_ARRAY_FRAME: &'static [u8] = b"*-1\r\n";
+const OK_FRAME: &'static [u8] = b"+OK\r\n";
 const SIMPLE_STRING_MARK: u8 = b'+';
 const ERROR_MARK: u8 = b'-';
 const BULK_STRING_MARK: u8 = b'$';
@@ -104,7 +106,7 @@ macro_rules! FrameTests {
                 Ok(v) => v,
                 Err(e) => {
                     err_msg = format!("{:?}", e);
-                    Frame::Null
+                    Frame::NullString
                 }
             };
             let decoded = encode(&res).unwrap();
@@ -117,8 +119,8 @@ macro_rules! FrameTests {
 #[cfg(test)]
 mod tests {
     use crate::protocol::*;
-    use encode::*;
     use decode::*;
+    use encode::*;
     #[test]
     fn displays_test() {
         FrameTests!(Display
