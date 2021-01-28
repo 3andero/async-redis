@@ -90,10 +90,20 @@ const DLEM_MARK: &'static [u8] = b"\r\n";
 
 #[macro_export]
 macro_rules! FrameTests {
-    (Display $($cmd:expr),*) => {
+    (DisplayDecodeFn $($cmd:expr),*) => {
         let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
         for param in params.iter_mut() {
             let res = decode(&mut param.clone());
+            println!("{:?} => {:?}", param, res);
+        }
+    };
+    (DisplayIntermediateParser $($cmd:expr),*) => {
+        let mut params = vec![$($cmd,)*];
+        for param in params.iter_mut() {
+            let mut buf = BytesMut::new();
+            buf.put_slice(&param.as_bytes());
+            let mut parser = decode::IntermediateParser::new();
+            let res = parser.parse(&mut buf);
             println!("{:?} => {:?}", param, res);
         }
     };
@@ -113,7 +123,7 @@ macro_rules! FrameTests {
             let equal = decoded.to_vec() == param.to_vec();
             println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", param, _p, res, decoded, err_msg, equal);
         }
-    }
+    };
 }
 
 #[cfg(test)]
@@ -122,9 +132,25 @@ mod tests {
     use decode::*;
     use encode::*;
     #[test]
-    fn displays_test() {
-        FrameTests!(Display
+    fn displays_decode() {
+        FrameTests!(DisplayDecodeFn
             "*0\r\n",
+            "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
+            "*3\r\n:1\r\n:2\r\n:3\r\n",
+            "*-1\r\n",
+            "*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n",
+            "$6\r\nfoobar\r\n",
+            "+OK\r\n",
+            "$3\r\nfoobar\r\n",
+            "$6\r\nfoar\r\n",
+            "$6\r\rfoobar\r\n"
+        );
+    }
+
+    #[test]
+    fn displays_parser() {
+        FrameTests!(DisplayIntermediateParser
+            // "*0\r\n",
             "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
             "*3\r\n:1\r\n:2\r\n:3\r\n",
             "*-1\r\n",

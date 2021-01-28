@@ -15,6 +15,7 @@ pub struct IntermediateToken {
 
 impl IntermediateToken {
     pub fn new(token_type: u8) -> Self {
+        println!("new token: {}", token_type as char);
         Self {
             token_type,
             expected_len: None,
@@ -25,20 +26,22 @@ impl IntermediateToken {
         }
     }
 
-    pub fn raw_bytes_remain(&self) -> bool {
-        self.is_recognized
+    pub fn has_raw_bytes_remain(&self) -> bool {
+        !self.is_recognized
     }
-    pub fn token_remain(&self) -> bool {
-        self.is_complete
+    pub fn has_token_remain(&self) -> bool {
+        !self.is_complete
     }
 
     fn read_line(&mut self, buf: &mut BytesMut) -> FrameResult<Bytes> {
         let mut cursor = Cursor::new(&buf[..]);
         if self.recognized_len.is_some() {
             let pos = self.recognized_len.unwrap();
+            println!("prev position: {}", pos);
             if cursor.remaining() < pos as usize {
                 return Err(FrameError::Invalid);
             } else {
+                println!("set pos: {}", pos);
                 cursor.set_position(pos);
             }
             self.recognized_len = None;
@@ -50,11 +53,12 @@ impl IntermediateToken {
             }
             e => e,
         })?;
-
+        println!("next_line: {:?}", Bytes::copy_from_slice(next_line));
         let ret = Ok(Bytes::copy_from_slice(next_line));
         let advance_pos = (cursor.position() + 2) as usize; // double check
         drop(cursor);
         buf.advance(advance_pos as usize);
+        println!("buf remains: {:?}", buf);
         ret
     }
 
@@ -72,6 +76,7 @@ impl IntermediateToken {
     }
 
     pub fn consume_raw_bytes(&mut self, buf: &mut BytesMut) -> FrameResult<()> {
+        println!("token: {}, buf: {:?}", self.token_type as char, buf);
         match self.token_type {
             SIMPLE_STRING_MARK => {
                 self.data = Some(Frame::SimpleString(self.read_line(buf)?));
@@ -125,17 +130,26 @@ impl IntermediateToken {
                     }));
                 }
             }
-            _ => unimplemented!(),
+            _ => {
+                return Err(FrameError::NotImplemented);
+            }
         }
 
         Ok(())
     }
 
     pub fn consume_token(&mut self, token: IntermediateToken) -> FrameResult<()> {
-        let token = token.into()?;
-        match (self.token_type, self.data.as_mut()) {
-            (ARRAY_MARK, Some(Frame::Arrays(FrameArrays { val, .. }))) => {
-                val.push(token);
+        println!("consume token: {:?}", &token);
+        let token = token.into_frame()?;
+        match (self.token_type, self.data.as_mut(), self.expected_len) {
+            (ARRAY_MARK, Some(Frame::Arrays(FrameArrays { val, .. })), Some(len)) => {
+                if val.len() < len {
+                    val.push(token);
+                }
+
+                if val.len() == len {
+                    self.is_complete = true;
+                }
             }
             _ => {
                 return Err(FrameError::Invalid);
@@ -144,13 +158,24 @@ impl IntermediateToken {
         Ok(())
     }
 
-    fn into(self) -> FrameResult<Frame> {
+    pub fn into_frame(self) -> FrameResult<Frame> {
         return self.data.ok_or_else(|| FrameError::Invalid);
     }
 }
 
 fn get_line<'a>(cursor: &mut Cursor<&'a [u8]>) -> FrameResult<&'a [u8]> {
-    unimplemented!()
+    let start = cursor.position() as usize;
+    let end = cursor.get_ref().len() - 1;
+
+    for i in start..end {
+        if cursor.get_ref()[i] == b'\r' && cursor.get_ref()[i + 1] == b'\n' {
+            cursor.set_position(i as u64);
+            return Ok(&cursor.get_ref()[..i]);
+        }
+    }
+
+    cursor.set_position((end - 1) as u64);
+    Err(FrameError::Incomplete)
 }
 
 pub fn get_integer(line: &Bytes) -> FrameResult<i64> {

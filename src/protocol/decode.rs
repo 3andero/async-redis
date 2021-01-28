@@ -2,20 +2,48 @@ use crate::protocol::*;
 use intermediate_parsing::*;
 
 #[derive(Debug)]
-struct IntermediateParser<'a> {
+pub struct IntermediateParser {
     token_stack: Vec<IntermediateToken>,
-    buf: &'a BytesMut
 }
 
-impl<'a> IntermediateParser<'a> {
-    fn new(buf: &'a BytesMut) -> Self {
+impl IntermediateParser {
+    pub fn new() -> Self {
         Self {
             token_stack: Vec::with_capacity(4),
-            buf
         }
     }
 
-    fn parse() -> 
+    pub fn parse(&mut self, buf: &mut BytesMut) -> FrameResult<Frame> {
+        loop {
+            println!("stack: {:?}", self.token_stack);
+            if self.token_stack.len() == 0
+                || !self.token_stack.last().unwrap().has_raw_bytes_remain()
+            {
+                let token_type = buf[0];
+                buf.advance(1);
+                self.token_stack.push(IntermediateToken::new(token_type));
+            }
+
+            println!("stack: {:?}", self.token_stack);
+            self.token_stack
+                .last_mut()
+                .unwrap()
+                .consume_raw_bytes(buf)?;
+
+            while !self.token_stack.last_mut().unwrap().has_token_remain() {
+                println!("stack: {:?}", self.token_stack);
+                let last_token = self.token_stack.pop().unwrap();
+                if self.token_stack.len() == 0 {
+                    return last_token.into_frame();
+                } else {
+                    self.token_stack
+                        .last_mut()
+                        .unwrap()
+                        .consume_token(last_token)?;
+                }
+            }
+        }
+    }
 }
 
 pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
