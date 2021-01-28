@@ -9,29 +9,32 @@ pub struct IntermediateParser {
 impl IntermediateParser {
     pub fn new() -> Self {
         Self {
-            token_stack: Vec::with_capacity(4),
+            token_stack: Vec::with_capacity(2),
         }
     }
 
     pub fn parse(&mut self, buf: &mut BytesMut) -> FrameResult<Frame> {
         loop {
-            println!("stack: {:?}", self.token_stack);
+            // println!("stack: {:?}", self.token_stack);
             if self.token_stack.len() == 0
                 || !self.token_stack.last().unwrap().has_raw_bytes_remain()
             {
+                if buf.len() == 0 {
+                    return Err(FrameError::Incomplete);
+                }
                 let token_type = buf[0];
                 buf.advance(1);
                 self.token_stack.push(IntermediateToken::new(token_type));
             }
 
-            println!("stack: {:?}", self.token_stack);
+            // println!("stack: {:?}", self.token_stack);
             self.token_stack
                 .last_mut()
                 .unwrap()
                 .consume_raw_bytes(buf)?;
 
             while !self.token_stack.last_mut().unwrap().has_token_remain() {
-                println!("stack: {:?}", self.token_stack);
+                // println!("stack: {:?}", self.token_stack);
                 let last_token = self.token_stack.pop().unwrap();
                 if self.token_stack.len() == 0 {
                     return last_token.into_frame();

@@ -1,7 +1,6 @@
 use crate::protocol::*;
 use bytes::Bytes;
-use num_traits::ops::inv;
-use std::{io::Cursor, unimplemented};
+use std::io::Cursor;
 
 #[derive(Debug)]
 pub struct IntermediateToken {
@@ -15,7 +14,7 @@ pub struct IntermediateToken {
 
 impl IntermediateToken {
     pub fn new(token_type: u8) -> Self {
-        println!("new token: {}", token_type as char);
+        // println!("new token: {}", token_type as char);
         Self {
             token_type,
             expected_len: None,
@@ -37,11 +36,11 @@ impl IntermediateToken {
         let mut cursor = Cursor::new(&buf[..]);
         if self.recognized_len.is_some() {
             let pos = self.recognized_len.unwrap();
-            println!("prev position: {}", pos);
+            // println!("prev position: {}", pos);
             if cursor.remaining() < pos as usize {
                 return Err(FrameError::Invalid);
             } else {
-                println!("set pos: {}", pos);
+                // println!("set pos: {}", pos);
                 cursor.set_position(pos);
             }
             self.recognized_len = None;
@@ -53,12 +52,12 @@ impl IntermediateToken {
             }
             e => e,
         })?;
-        println!("next_line: {:?}", Bytes::copy_from_slice(next_line));
+        // println!("next_line: {:?}", Bytes::copy_from_slice(next_line));
         let ret = Ok(Bytes::copy_from_slice(next_line));
         let advance_pos = (cursor.position() + 2) as usize; // double check
         drop(cursor);
         buf.advance(advance_pos as usize);
-        println!("buf remains: {:?}", buf);
+        // println!("buf remains: {:?}", buf);
         ret
     }
 
@@ -76,7 +75,7 @@ impl IntermediateToken {
     }
 
     pub fn consume_raw_bytes(&mut self, buf: &mut BytesMut) -> FrameResult<()> {
-        println!("token: {}, buf: {:?}", self.token_type as char, buf);
+        // println!("token: {}, buf: {:?}", self.token_type as char, buf);
         match self.token_type {
             SIMPLE_STRING_MARK => {
                 self.data = Some(Frame::SimpleString(self.read_line(buf)?));
@@ -124,8 +123,11 @@ impl IntermediateToken {
                 } else {
                     self.expected_len = Some(maybe_len as usize);
                     self.is_recognized = true;
+                    if maybe_len == 0 {
+                        self.is_complete = true;
+                    }
                     self.data = Some(Frame::Arrays(FrameArrays {
-                        val: Vec::with_capacity(4),
+                        val: Vec::with_capacity(maybe_len as usize),
                         _encode_length: 0,
                     }));
                 }
@@ -139,7 +141,7 @@ impl IntermediateToken {
     }
 
     pub fn consume_token(&mut self, token: IntermediateToken) -> FrameResult<()> {
-        println!("consume token: {:?}", &token);
+        // println!("consume token: {:?}", &token);
         let token = token.into_frame()?;
         match (self.token_type, self.data.as_mut(), self.expected_len) {
             (ARRAY_MARK, Some(Frame::Arrays(FrameArrays { val, .. })), Some(len)) => {

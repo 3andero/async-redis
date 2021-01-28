@@ -1,6 +1,6 @@
 use crate::protocol::*;
 use anyhow::{Error, Result};
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::BytesMut;
 use tokio::io::*;
 use tokio::net::*;
 use tracing::*;
@@ -28,11 +28,10 @@ impl Connection {
 
     #[instrument(skip(self))]
     pub async fn read_frame(&mut self) -> Result<Option<Frame>> {
+        let mut parser = decode::IntermediateParser::new();
         loop {
-            let mut buf = Bytes::from(self.buf.to_vec());
-            let origin_len = buf.len();
-            debug!("<{}>buffer: {:?}, len: {}", self.id, &buf, origin_len);
-            match decode::decode(&mut buf) {
+            debug!("<{}>buffer: {:?}", self.id, &self.buf);
+            match parser.parse(&mut self.buf) {
                 Err(FrameError::Incomplete) => {}
                 Err(FrameError::Other(e)) => {
                     return Err(e);
@@ -44,7 +43,6 @@ impl Connection {
                     return Err(Error::new(FrameError::Invalid));
                 }
                 Ok(frame) => {
-                    self.buf.advance(origin_len - buf.len());
                     return Ok(Some(frame));
                 }
             }

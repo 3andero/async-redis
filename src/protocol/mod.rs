@@ -108,20 +108,20 @@ macro_rules! FrameTests {
         }
     };
     (Encode $($cmd:expr),*) => {
-        let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
+        let mut params = vec![$($cmd,)*];
         for param in params.iter_mut() {
-            let mut _p = param.clone();
-            let mut err_msg = String::new();
-            let res = match decode(&mut _p) {
-                Ok(v) => v,
+            let mut buf = BytesMut::new();
+            buf.put_slice(&param.as_bytes());
+            let mut parser = decode::IntermediateParser::new();
+            let (res, err_msg) = match parser.parse(&mut buf) {
+                Ok(v) => (v, String::from("")),
                 Err(e) => {
-                    err_msg = format!("{:?}", e);
-                    Frame::NullString
+                    (Frame::NullString, format!("{:?}", e))
                 }
             };
             let decoded = encode(&res).unwrap();
-            let equal = decoded.to_vec() == param.to_vec();
-            println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", param, _p, res, decoded, err_msg, equal);
+            let equal = decoded.to_vec() == param.as_bytes();
+            println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", param, buf, res, decoded, err_msg, equal);
         }
     };
 }
@@ -151,6 +151,7 @@ mod tests {
     fn displays_parser() {
         FrameTests!(DisplayIntermediateParser
             "*0\r\n",
+            "$0\r\n\r\n",
             "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
             "*3\r\n:1\r\n:2\r\n:3\r\n",
             "*-1\r\n",
@@ -167,6 +168,7 @@ mod tests {
     fn encode_test() {
         FrameTests!(Encode
             "*0\r\n",
+            "$0\r\n\r\n",
             "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
             "*3\r\n:1\r\n:2\r\n:3\r\n",
             "*-1\r\n",
