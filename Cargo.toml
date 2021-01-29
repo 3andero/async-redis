@@ -21,3 +21,6 @@ num_cpus = "1.13.0"
 crossfire = "0.1"
 num-traits = "0.2.14"
 clap = "2.33.3"
+
+#[profile.release]
+#debug = true

@@ -58,12 +58,12 @@ impl IntermediateToken {
             e => e,
         })?;
         // println!("next_line: {:?}", Bytes::copy_from_slice(next_line));
-        let ret = Ok(Bytes::copy_from_slice(next_line));
-        let advance_pos = (cursor.position() + 2) as usize; // double check
+        let advance_pos = cursor.position() as usize; // double check
         drop(cursor);
-        buf.advance(advance_pos as usize);
+        let ret = buf.split_to(advance_pos as usize).freeze();
+        buf.advance(2);
+        Ok(ret)
         // println!("buf remains: {:?}", buf);
-        ret
     }
 
     fn read_span(&mut self, span: usize, buf: &mut BytesMut) -> FrameResult<Bytes> {
@@ -71,8 +71,8 @@ impl IntermediateToken {
             return Err(FrameError::Incomplete);
         }
         if &buf.chunk()[span..span + 2] == b"\r\n" {
-            let ret = Ok(Bytes::copy_from_slice(&buf.chunk()[..span]));
-            buf.advance(span + 2);
+            let ret = Ok(buf.split_to(span).freeze());
+            buf.advance(2);
             return ret;
         } else {
             return Err(FrameError::Invalid(String::from("[1]")));
