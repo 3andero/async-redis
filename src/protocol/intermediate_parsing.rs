@@ -33,17 +33,22 @@ impl IntermediateToken {
     }
 
     fn read_line(&mut self, buf: &mut BytesMut) -> FrameResult<Bytes> {
+        if buf.len() == 0 {
+            return Err(FrameError::Incomplete);
+        }
         let mut cursor = Cursor::new(&buf[..]);
         if self.recognized_len.is_some() {
-            let pos = self.recognized_len.unwrap();
+            let pos = self.recognized_len.take().unwrap();
             // println!("prev position: {}", pos);
             if cursor.remaining() < pos as usize {
-                return Err(FrameError::Invalid);
+                return Err(FrameError::Invalid(format!(
+                    "[0] pos: {}, buf: {:?}",
+                    pos, buf
+                )));
             } else {
                 // println!("set pos: {}", pos);
                 cursor.set_position(pos);
             }
-            self.recognized_len = None;
         }
         let next_line = get_line(&mut cursor).map_err(|e| match e {
             FrameError::Incomplete => {
@@ -70,7 +75,7 @@ impl IntermediateToken {
             buf.advance(span + 2);
             return ret;
         } else {
-            return Err(FrameError::Invalid);
+            return Err(FrameError::Invalid(String::from("[1]")));
         }
     }
 
@@ -154,20 +159,26 @@ impl IntermediateToken {
                 }
             }
             _ => {
-                return Err(FrameError::Invalid);
+                return Err(FrameError::Invalid(String::from("[2]")));
             }
         }
         Ok(())
     }
 
     pub fn into_frame(self) -> FrameResult<Frame> {
-        return self.data.ok_or_else(|| FrameError::Invalid);
+        return self
+            .data
+            .ok_or_else(|| FrameError::Invalid(String::from("[3]")));
     }
 }
 
 fn get_line<'a>(cursor: &mut Cursor<&'a [u8]>) -> FrameResult<&'a [u8]> {
+    if cursor.get_ref().len() == 0 {
+        return Err(FrameError::Incomplete);
+    }
     let start = cursor.position() as usize;
     let end = cursor.get_ref().len() - 1;
+    // println!("get_line start {}, end {}", start, end);
 
     for i in start..end {
         if cursor.get_ref()[i] == b'\r' && cursor.get_ref()[i + 1] == b'\n' {
@@ -176,7 +187,7 @@ fn get_line<'a>(cursor: &mut Cursor<&'a [u8]>) -> FrameResult<&'a [u8]> {
         }
     }
 
-    cursor.set_position((end - 1) as u64);
+    cursor.set_position(end as u64);
     Err(FrameError::Incomplete)
 }
 

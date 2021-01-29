@@ -58,8 +58,8 @@ pub enum FrameError {
     Incomplete,
     #[error(display = "Not Implemented")]
     NotImplemented,
-    #[error(display = "Invalid")]
-    Invalid,
+    #[error(display = "Invalid: {}", _0)]
+    Invalid(String),
     #[error(display = "{}", _0)]
     Other(Error),
 }

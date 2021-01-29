@@ -39,8 +39,8 @@ impl Connection {
                 Err(FrameError::NotImplemented) => {
                     return Err(Error::new(FrameError::NotImplemented));
                 }
-                Err(FrameError::Invalid) => {
-                    return Err(Error::new(FrameError::Invalid));
+                Err(FrameError::Invalid(v)) => {
+                    return Err(Error::new(FrameError::Invalid(v)));
                 }
                 Ok(frame) => {
                     return Ok(Some(frame));
