@@ -33,7 +33,7 @@ impl IntermediateToken {
     }
 
     fn read_line(&mut self, buf: &mut BytesMut) -> FrameResult<Bytes> {
-        if buf.len() == 0 {
+        if buf.len() < 2 {
             return Err(FrameError::Incomplete);
         }
         let mut cursor = Cursor::new(&buf[..]);
@@ -173,14 +173,14 @@ impl IntermediateToken {
 }
 
 fn get_line<'a>(cursor: &mut Cursor<&'a [u8]>) -> FrameResult<&'a [u8]> {
-    if cursor.get_ref().len() == 0 {
+    if cursor.remaining() < 2 {
         return Err(FrameError::Incomplete);
     }
     let start = cursor.position() as usize;
     let end = cursor.get_ref().len() - 1;
     // println!("get_line start {}, end {}", start, end);
 
-    for i in start..end {
+    for i in (start..end) {
         if cursor.get_ref()[i] == b'\r' && cursor.get_ref()[i + 1] == b'\n' {
             cursor.set_position(i as u64);
             return Ok(&cursor.get_ref()[..i]);
