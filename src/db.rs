@@ -46,6 +46,29 @@ impl DB {
             .map(|v| v.data.clone())
     }
 
+    pub fn debug(&self, key: &Bytes) -> Option<Bytes> {
+        match &key.to_ascii_lowercase()[..] {
+            b"key_num" => {
+                return Some(Bytes::from(format!("[{}]{}", self.id, self.database.len())));
+            }
+            b"total_key_len" => {
+                return Some(Bytes::from(format!(
+                    "[{}]{}",
+                    self.id,
+                    self.database.keys().fold(0, |res, b| res + b.len())
+                )));
+            }
+            b"total_val_len" => {
+                return Some(Bytes::from(format!(
+                    "[{}]{}",
+                    self.id,
+                    self.database.values().fold(0, |res, b| res + b.data.len())
+                )));
+            }
+            _ => None,
+        }
+    }
+
     pub fn set(&mut self, key: Bytes, data: Bytes, nounce: u64, expiration: Option<Instant>) {
         self.database.insert(
             key,

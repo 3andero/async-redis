@@ -8,14 +8,17 @@ pub mod set;
 use crate::{db::DB, protocol::Frame, BytesToString};
 use set::*;
 
+pub mod debug;
 use bytes::*;
+use debug::*;
 use enum_dispatch::*;
 
 #[enum_dispatch]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Command {
     Get,
     Set,
+    Debug,
 }
 
 #[enum_dispatch(Command)]
@@ -128,6 +131,7 @@ impl Command {
         match &cmd_string.to_lowercase()[..] {
             "get" => Ok(Get::new(&mut parser)?.into()),
             "set" => Ok(Set::new(&mut parser)?.into()),
+            "debug" => Ok(Debug::new(&mut parser)?.into()),
             _ => Err(Error::new(CommandError::NotImplemented)),
         }
     }
