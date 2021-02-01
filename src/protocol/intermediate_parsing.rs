@@ -133,7 +133,10 @@ impl IntermediateToken {
                     }
                     self.data = Some(Frame::Arrays(FrameArrays {
                         val: Vec::with_capacity(maybe_len as usize),
-                        _encode_length: 0,
+                        _raw_bytes_length: 0,
+                        _msg_length: 0,
+                        _msg_num: 0,
+                        _initialized: false,
                     }));
                 }
             }
@@ -165,7 +168,11 @@ impl IntermediateToken {
         Ok(())
     }
 
-    pub fn into_frame(self) -> FrameResult<Frame> {
+    pub fn into_frame(mut self) -> FrameResult<Frame> {
+        match &mut self.data {
+            Some(Frame::Arrays(v)) => v.init_for_encoding(),
+            _ => (),
+        }
         return self
             .data
             .ok_or_else(|| FrameError::Invalid(String::from("[3]")));

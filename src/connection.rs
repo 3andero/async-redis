@@ -1,13 +1,17 @@
 use crate::protocol::*;
 use anyhow::{Error, Result};
 use bytes::BytesMut;
+use futures::future;
+use std::io::IoSlice;
+use std::pin::Pin;
 use tokio::io::*;
 use tokio::net::*;
 use tracing::*;
 
 #[derive(Debug)]
 pub struct Connection {
-    stream: BufWriter<TcpStream>,
+    // stream: BufWriter<TcpStream>,
+    stream: TcpStream,
     buf: BytesMut,
     pub id: u64,
 }
@@ -15,7 +19,8 @@ pub struct Connection {
 impl Connection {
     pub fn new(stream: TcpStream, id: u64) -> Self {
         Self {
-            stream: BufWriter::new(stream),
+            // stream: BufWriter::new(stream),
+            stream,
             buf: BytesMut::new(),
             id,
         }
@@ -58,12 +63,21 @@ impl Connection {
     }
 
     pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
-        let frame_byte = encode::encode(frame)?;
-        debug!("<{}>encoded frame_byte: {:?}", self.id, frame_byte);
-        self.stream
-            .write_all(&frame_byte)
+        let frame_byte_arr = encode::encode(frame)?;
+        debug!("<{}>encoded frame_byte: {:?}", self.id, frame_byte_arr);
+        let mut bufs = Vec::with_capacity(frame_byte_arr.len());
+        for frame_byte in frame_byte_arr.iter() {
+            bufs.push(IoSlice::new(&frame_byte[..]));
+        }
+
+        let mut writer = Pin::new(&mut self.stream);
+        future::poll_fn(|cx| writer.as_mut().poll_write_vectored(cx, &bufs[..]))
             .await
             .map_err(|e| Box::new(e))?;
+        // self.stream
+        //     .write_buf(&mut bufs[..])
+        //     .await
+        //     .map_err(|e| Box::new(e))?;
 
         self.stream.flush().await.map_err(|e| Box::new(e))?;
         Ok(())
