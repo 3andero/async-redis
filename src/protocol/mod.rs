@@ -40,6 +40,19 @@ impl From<Bytes> for Frame {
     }
 }
 
+impl From<Option<Bytes>> for Frame {
+    fn from(bt: Option<Bytes>) -> Frame {
+        return bt.map_or(Frame::NullString, |x| x.into());
+    }
+}
+
+impl From<Vec<Option<Bytes>>> for Frame {
+    fn from(arr: Vec<Option<Bytes>>) -> Frame {
+        let x = arr.into_iter().map(|x| x.into()).collect();
+        Frame::Arrays(FrameArrays::new(x))
+    }
+}
+
 impl Frame {
     fn len(&self) -> usize {
         match self {
