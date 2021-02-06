@@ -1,5 +1,7 @@
 use crate::{cmd::*, protocol::Frame};
 use bytes::*;
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 use std::collections::{BTreeMap, HashMap};
 use tokio::{
     select,
@@ -7,6 +9,11 @@ use tokio::{
     time::{Duration, Instant},
 };
 use tracing::{debug, info};
+
+pub enum DBReturn {
+    Single(Option<Bytes>),
+    List(Vec<Option<Bytes>>),
+}
 
 #[derive(Debug)]
 pub enum TaskParam {
@@ -46,26 +53,47 @@ impl DB {
             .map(|v| v.data.clone())
     }
 
-    pub fn debug(&self, key: &Bytes) -> Option<Bytes> {
+    pub fn debug(&self, key: &Bytes) -> DBReturn {
         match &key.to_ascii_lowercase()[..] {
             b"key_num" => {
-                return Some(Bytes::from(format!("[{}]{}", self.id, self.database.len())));
+                return DBReturn::Single(Some(Bytes::from(format!(
+                    "[{}]{}",
+                    self.id,
+                    self.database.len()
+                ))));
             }
             b"total_key_len" => {
-                return Some(Bytes::from(format!(
+                return DBReturn::Single(Some(Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.keys().fold(0, |res, b| res + b.len())
-                )));
+                ))));
             }
             b"total_val_len" => {
-                return Some(Bytes::from(format!(
+                return DBReturn::Single(Some(Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.values().fold(0, |res, b| res + b.data.len())
-                )));
+                ))));
             }
-            _ => None,
+            b"random_keys" => {
+                const TAKE: usize = 5;
+                let mut idxs: Vec<usize> = (0..self.database.len()).collect();
+                idxs.shuffle(&mut thread_rng());
+                let mut rand_idx = idxs[..TAKE].to_vec();
+                rand_idx.sort();
+                let mut res = Vec::with_capacity(TAKE);
+                for (idx, key) in self.database.keys().enumerate() {
+                    if idx == rand_idx[res.len()] {
+                        res.push(Some(key.clone()));
+                    }
+                    if res.len() == TAKE {
+                        break;
+                    }
+                }
+                return DBReturn::List(res);
+            }
+            _ => DBReturn::Single(None),
         }
     }
 
