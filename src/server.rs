@@ -11,7 +11,14 @@ use core::mem;
 use tokio::{net::TcpListener, spawn, sync::*};
 use tracing::*;
 
-use crate::{cmd::*, connection::*, db::*, protocol::Frame, shutdown::Shutdown, Result};
+use crate::{
+    cmd::*,
+    connection::*,
+    db::*,
+    protocol::{Frame, FrameArrays},
+    shutdown::Shutdown,
+    Result,
+};
 
 const BUFFERSIZE: usize = 100;
 
@@ -130,7 +137,6 @@ impl Listener {
             let (stream, _) = self.listener.accept().await?;
             debug!("<{}>: stream accepted", conn_id);
 
-            let conn = Connection::new(stream, conn_id);
             debug!(
                 "<{}>: recycle_rx: {:?}, channel_counter: {:?}",
                 conn_id, recycle_rx, channel_counter
@@ -141,9 +147,10 @@ impl Listener {
             {
                 let mut ret: Handler = recycle_rx.recv().await.unwrap();
                 debug!("<{}>: recv succeed, handler[{}]", conn_id, ret.id);
-                ret.connection = conn;
+                ret.connection.refresh(stream, conn_id);
                 ret
             } else {
+                let conn = Connection::new(stream, conn_id);
                 float_num += 1;
                 debug!("<{}>: new handler[{}]", conn_id, float_num);
                 let (ret_tx, ret_rx) = mpsc::channel(1);
@@ -226,6 +233,25 @@ impl Handler {
 
             let command = Command::new(&frame);
             let ret_frame = match command {
+                Ok(cmd @ Command::Debug(_)) => {
+                    let mut ret = Vec::with_capacity(self.dispatcher.num_threads);
+                    for db_id in 0..self.dispatcher.num_threads {
+                        let option_tx = if self.sent[db_id] == -1 {
+                            Some(self.ret_tx.clone())
+                        } else {
+                            None
+                        };
+                        let cmd_copy = cmd.clone();
+                        self.dispatcher.tasks_tx[db_id]
+                            .send(TaskParam::Task((cmd_copy, self.id, option_tx)))
+                            .await?;
+
+                        self.sent[db_id] = std::cmp::max(self.sent[db_id] + 1, 1);
+
+                        ret.push(self.ret_rx.recv().await.unwrap());
+                    }
+                    Frame::Arrays(FrameArrays::new(ret))
+                }
                 Ok(mut cmd) => {
                     debug!(
                         "[{}]<{}>parsed command: {:?}",

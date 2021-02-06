@@ -1,7 +1,7 @@
 use crate::cmd::*;
 use anyhow::Result;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Get {
     key: Bytes,
     nounce: u64,
@@ -18,7 +18,7 @@ impl Get {
 
 impl ExecDB for Get {
     fn exec(&self, db: &mut DB) -> Frame {
-        db.get(&self.key).map_or(Frame::NullString, |v| v.into())
+        db.get(&self.key).into()
     }
 
     fn get_key(&self) -> &Bytes {

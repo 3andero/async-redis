@@ -6,6 +6,7 @@ use tracing::*;
 pub mod decode;
 pub mod encode;
 mod intermediate_parsing;
+pub mod reusable_buf;
 
 #[derive(Debug)]
 pub struct FrameArrays {
@@ -62,6 +63,19 @@ pub enum Frame {
 impl From<Bytes> for Frame {
     fn from(bt: Bytes) -> Frame {
         return Frame::BulkStrings(bt);
+    }
+}
+
+impl From<Option<Bytes>> for Frame {
+    fn from(bt: Option<Bytes>) -> Frame {
+        return bt.map_or(Frame::NullString, |x| x.into());
+    }
+}
+
+impl From<Vec<Option<Bytes>>> for Frame {
+    fn from(arr: Vec<Option<Bytes>>) -> Frame {
+        let x = arr.into_iter().map(|x| x.into()).collect();
+        Frame::Arrays(FrameArrays::new(x))
     }
 }
 
@@ -147,7 +161,8 @@ macro_rules! FrameTests {
     (DisplayIntermediateParser $($cmd:expr),*) => {
         let mut params = vec![$($cmd,)*];
         for param in params.iter_mut() {
-            let mut buf = BytesMut::new();
+            // let mut buf = BytesMut::new();
+            let mut buf = reusable_buf::ReusableBuf::new();
             buf.put_slice(&param.as_bytes());
             let mut parser = decode::IntermediateParser::new();
             let res = parser.parse(&mut buf);
@@ -156,13 +171,15 @@ macro_rules! FrameTests {
     };
     (Encode $($cmd:expr),*) => {
         let mut params = vec![$($cmd,)*];
+        let mut buf = reusable_buf::ReusableBuf::new();
         for param in params.iter_mut() {
-            let mut buf = BytesMut::new();
+            buf.reserve(param.len());
             buf.put_slice(&param.as_bytes());
             let mut parser = decode::IntermediateParser::new();
             let (res, err_msg) = match parser.parse(&mut buf) {
                 Ok(v) => (v, String::from("")),
                 Err(e) => {
+                    buf.reset();
                     (Frame::NullString, format!("{:?}", e))
                 }
             };
@@ -222,10 +239,10 @@ mod tests {
             "$0\r\n\r\n",
             "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
             "*3\r\n:1\r\n:2\r\n:3\r\n",
+            "*12\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n",
             "*-1\r\n",
             "$-1\r\n",
             "*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n",
-            "*12\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n",
             "$6\r\nfoobar\r\n",
             "+OK\r\n",
             "$3\r\nfoobar\r\n",

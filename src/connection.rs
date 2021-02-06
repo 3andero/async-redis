@@ -1,7 +1,7 @@
 use crate::protocol::*;
 use anyhow::{Error, Result};
-use bytes::BytesMut;
 use futures::future;
+use reusable_buf::ReusableBuf;
 use std::io::IoSlice;
 use std::pin::Pin;
 use tokio::io::*;
@@ -10,20 +10,23 @@ use tracing::*;
 
 #[derive(Debug)]
 pub struct Connection {
-    // stream: BufWriter<TcpStream>,
     stream: TcpStream,
-    buf: BytesMut,
+    buf: ReusableBuf,
     pub id: u64,
 }
 
 impl Connection {
     pub fn new(stream: TcpStream, id: u64) -> Self {
         Self {
-            // stream: BufWriter::new(stream),
             stream,
-            buf: BytesMut::new(),
+            buf: ReusableBuf::new(),
             id,
         }
+    }
+
+    pub fn refresh(&mut self, stream: TcpStream, id: u64) {
+        self.stream = stream;
+        self.id = id;
     }
 
     pub async fn close_connection(&mut self) {

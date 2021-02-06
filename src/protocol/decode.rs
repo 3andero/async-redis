@@ -1,5 +1,6 @@
 use crate::protocol::*;
 use intermediate_parsing::*;
+use reusable_buf::*;
 
 #[derive(Debug)]
 pub struct IntermediateParser {
@@ -13,7 +14,7 @@ impl IntermediateParser {
         }
     }
 
-    pub fn parse(&mut self, buf: &mut BytesMut) -> FrameResult<Frame> {
+    pub fn parse(&mut self, buf: &mut ReusableBuf) -> FrameResult<Frame> {
         loop {
             // println!("stack: {:?}", self.token_stack);
             if self.token_stack.len() == 0
@@ -49,6 +50,7 @@ impl IntermediateParser {
     }
 }
 
+#[allow(dead_code)]
 pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
     if buf.len() == 0 {
         return Err(FrameError::Incomplete);
@@ -103,6 +105,7 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
     }
 }
 
+#[allow(dead_code)]
 fn get_line(buf: &mut Bytes) -> FrameResult<Bytes> {
     let mut matched = false;
     for (pos, bt) in buf.iter().enumerate() {

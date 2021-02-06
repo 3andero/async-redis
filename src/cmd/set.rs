@@ -1,7 +1,7 @@
 use crate::{cmd::*, db::DB};
 use anyhow::Result;
 use tokio::time::{Duration, Instant};
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Set {
     key: Bytes,
     val: Bytes,
