@@ -1,4 +1,4 @@
-use bytes::{buf::UninitSlice, Bytes};
+use bytes::buf::UninitSlice;
 use bytes::{Buf, BufMut};
 use core::borrow::{Borrow, BorrowMut};
 use core::ops::{Deref, DerefMut};

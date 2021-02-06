@@ -1,7 +1,7 @@
-use crate::protocol::*;
+use crate::{cmd, protocol::*};
 use bytes::Bytes;
 use reusable_buf::ReusableBuf;
-use std::io::Cursor;
+use std::{cmp::min, io::Cursor};
 
 #[derive(Debug)]
 pub struct IntermediateToken {
@@ -11,6 +11,7 @@ pub struct IntermediateToken {
     is_recognized: bool,
     is_complete: bool,
     data: Option<Frame>,
+    tmp_buf: Option<BytesMut>,
 }
 
 impl IntermediateToken {
@@ -23,6 +24,7 @@ impl IntermediateToken {
             is_recognized: false,
             is_complete: false,
             data: None,
+            tmp_buf: None,
         }
     }
 
@@ -67,14 +69,29 @@ impl IntermediateToken {
         ret
     }
 
-    fn read_span(&mut self, span: usize, buf: &mut ReusableBuf) -> FrameResult<Bytes> {
+    fn read_expected(&mut self, buf: &mut ReusableBuf) -> FrameResult<Bytes> {
+        assert!(self.expected_len.is_some());
+        let span = self.expected_len.unwrap();
         if buf.len() < span + 2 {
+            let max_copy_cnt = std::cmp::min(buf.len(), span);
+            match &mut self.tmp_buf {
+                Some(b) => {
+                    b.extend_from_slice(&buf[..max_copy_cnt]);
+                    self.expected_len = Some(span - max_copy_cnt);
+                    buf.advance(max_copy_cnt);
+                    buf.reserve(span - max_copy_cnt + 2);
+                }
+                None => {
+                    panic!("we should've already initialized the buffer.");
+                }
+            }
             return Err(FrameError::Incomplete);
         }
         if &buf.chunk()[span..span + 2] == b"\r\n" {
-            let ret = Ok(Bytes::copy_from_slice(&buf.chunk()[..span]));
+            let mut tmp_buf = self.tmp_buf.take().unwrap();
+            tmp_buf.extend_from_slice(&buf[..span]);
             buf.advance(span + 2);
-            return ret;
+            return Ok(tmp_buf.freeze());
         } else {
             return Err(FrameError::Invalid(String::from("[1]")));
         }
@@ -104,11 +121,11 @@ impl IntermediateToken {
                         return Ok(());
                     } else {
                         self.expected_len = Some(maybe_len as usize);
+                        self.tmp_buf = Some(BytesMut::with_capacity(maybe_len as usize));
                     }
                 }
 
-                let span = self.expected_len.unwrap();
-                self.data = Some(Frame::BulkStrings(self.read_span(span, buf)?));
+                self.data = Some(Frame::BulkStrings(self.read_expected(buf)?));
                 self.is_complete = true;
                 self.is_recognized = true;
             }
@@ -173,6 +190,7 @@ impl IntermediateToken {
     }
 }
 
+//
 fn get_line<'a>(cursor: &mut Cursor<&'a [u8]>) -> FrameResult<&'a [u8]> {
     if cursor.remaining() < 2 {
         return Err(FrameError::Incomplete);
@@ -181,7 +199,7 @@ fn get_line<'a>(cursor: &mut Cursor<&'a [u8]>) -> FrameResult<&'a [u8]> {
     let end = cursor.get_ref().len() - 1;
     // println!("get_line start {}, end {}", start, end);
 
-    for i in (start..end) {
+    for i in start..end {
         if cursor.get_ref()[i] == b'\r' && cursor.get_ref()[i + 1] == b'\n' {
             cursor.set_position(i as u64);
             return Ok(&cursor.get_ref()[..i]);

@@ -137,7 +137,6 @@ impl Listener {
             let (stream, _) = self.listener.accept().await?;
             debug!("<{}>: stream accepted", conn_id);
 
-            let conn = Connection::new(stream, conn_id);
             debug!(
                 "<{}>: recycle_rx: {:?}, channel_counter: {:?}",
                 conn_id, recycle_rx, channel_counter
@@ -148,9 +147,10 @@ impl Listener {
             {
                 let mut ret: Handler = recycle_rx.recv().await.unwrap();
                 debug!("<{}>: recv succeed, handler[{}]", conn_id, ret.id);
-                ret.connection = conn;
+                ret.connection.refresh(stream, conn_id);
                 ret
             } else {
+                let conn = Connection::new(stream, conn_id);
                 float_num += 1;
                 debug!("<{}>: new handler[{}]", conn_id, float_num);
                 let (ret_tx, ret_rx) = mpsc::channel(1);
