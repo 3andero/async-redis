@@ -1,6 +1,7 @@
 use crate::protocol::*;
 use anyhow::{Error, Result};
-use bytes::BytesMut;
+use reusable_buf::ReusableBuf;
+// use bytes::BytesMut;
 use tokio::io::*;
 use tokio::net::*;
 use tracing::*;
@@ -8,7 +9,7 @@ use tracing::*;
 #[derive(Debug)]
 pub struct Connection {
     stream: BufWriter<TcpStream>,
-    buf: BytesMut,
+    buf: ReusableBuf,
     pub id: u64,
 }
 
@@ -16,9 +17,14 @@ impl Connection {
     pub fn new(stream: TcpStream, id: u64) -> Self {
         Self {
             stream: BufWriter::new(stream),
-            buf: BytesMut::new(),
+            buf: ReusableBuf::new(),
             id,
         }
+    }
+
+    pub fn refresh(&mut self, stream: TcpStream, id: u64) {
+        self.stream = BufWriter::new(stream);
+        self.id = id;
     }
 
     pub async fn close_connection(&mut self) {
