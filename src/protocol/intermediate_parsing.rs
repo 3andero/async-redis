@@ -1,5 +1,6 @@
 use crate::protocol::*;
 use bytes::Bytes;
+use reusable_buf::ReusableBuf;
 use std::io::Cursor;
 
 #[derive(Debug)]
@@ -32,7 +33,7 @@ impl IntermediateToken {
         !self.is_complete
     }
 
-    fn read_line(&mut self, buf: &mut BytesMut) -> FrameResult<Bytes> {
+    fn read_line(&mut self, buf: &mut ReusableBuf) -> FrameResult<Bytes> {
         if buf.len() < 2 {
             return Err(FrameError::Incomplete);
         }
@@ -66,7 +67,7 @@ impl IntermediateToken {
         ret
     }
 
-    fn read_span(&mut self, span: usize, buf: &mut BytesMut) -> FrameResult<Bytes> {
+    fn read_span(&mut self, span: usize, buf: &mut ReusableBuf) -> FrameResult<Bytes> {
         if buf.len() < span + 2 {
             return Err(FrameError::Incomplete);
         }
@@ -79,7 +80,7 @@ impl IntermediateToken {
         }
     }
 
-    pub fn consume_raw_bytes(&mut self, buf: &mut BytesMut) -> FrameResult<()> {
+    pub fn consume_raw_bytes(&mut self, buf: &mut ReusableBuf) -> FrameResult<()> {
         // println!("token: {}, buf: {:?}", self.token_type as char, buf);
         match self.token_type {
             SIMPLE_STRING_MARK => {

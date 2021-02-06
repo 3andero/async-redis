@@ -1,5 +1,6 @@
 use crate::protocol::*;
 use intermediate_parsing::*;
+use reusable_buf::*;
 
 #[derive(Debug)]
 pub struct IntermediateParser {
@@ -13,7 +14,7 @@ impl IntermediateParser {
         }
     }
 
-    pub fn parse(&mut self, buf: &mut BytesMut) -> FrameResult<Frame> {
+    pub fn parse(&mut self, buf: &mut ReusableBuf) -> FrameResult<Frame> {
         loop {
             // println!("stack: {:?}", self.token_stack);
             if self.token_stack.len() == 0
