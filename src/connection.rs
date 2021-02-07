@@ -27,6 +27,7 @@ impl Connection {
     pub fn refresh(&mut self, stream: TcpStream, id: u64) {
         self.stream = stream;
         self.id = id;
+        self.buf.reset();
     }
 
     pub async fn close_connection(&mut self) {
@@ -34,11 +35,11 @@ impl Connection {
         let _ = self.stream.shutdown().await;
     }
 
-    #[instrument(skip(self))]
+    // #[instrument(skip(self))]
     pub async fn read_frame(&mut self) -> Result<Option<Frame>> {
         let mut parser = decode::IntermediateParser::new();
         loop {
-            debug!("<{}>buffer: {:?}", self.id, &self.buf);
+            trace!("<{}>buffer: {:?}", self.id, &self.buf);
             match parser.parse(&mut self.buf) {
                 Err(FrameError::Incomplete) => {}
                 Err(FrameError::Other(e)) => {

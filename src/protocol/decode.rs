@@ -1,4 +1,5 @@
-use crate::protocol::*;
+use crate::{protocol::*, utils::get_integer};
+
 use intermediate_parsing::*;
 use reusable_buf::*;
 
@@ -67,12 +68,12 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
         }
         b':' => {
             let next_line = get_line(buf)?;
-            let res = get_integer(&next_line)?;
+            let res = get_integer(&next_line).map_err(|e| FrameError::Other(e))?;
             Ok(Frame::Integers(res))
         }
         b'$' => {
             let mut next_line = get_line(buf)?;
-            let len = get_integer(&next_line)?;
+            let len = get_integer(&next_line).map_err(|e| FrameError::Other(e))?;
             let res = if len == -1 {
                 Frame::NullString
             } else {
@@ -86,7 +87,7 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
         }
         b'*' => {
             let next_line = get_line(buf)?;
-            let len = get_integer(&next_line)?;
+            let len = get_integer(&next_line).map_err(|e| FrameError::Other(e))?;
             let res = if len == -1 {
                 Frame::NullString
             } else {
