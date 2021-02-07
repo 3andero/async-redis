@@ -152,7 +152,7 @@ macro_rules! FrameTests {
         let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
         for param in params.iter_mut() {
             let res = protocol::Decode(&mut param.clone());
-            println!("{:?} => {:?}", param, res);
+            // println!("{:?} => {:?}", param, res);
         }
     };
     (Encode $($cmd:expr),*) => {
@@ -169,7 +169,7 @@ macro_rules! FrameTests {
             };
             let decoded = protocol::Encode(&res).unwrap();
             let equal = decoded.to_vec() == param.to_vec();
-            println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", param, _p, res, decoded, err_msg, equal);
+            // println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", param, _p, res, decoded, err_msg, equal);
         }
     }
 }

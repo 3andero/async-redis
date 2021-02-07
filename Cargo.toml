@@ -1,6 +1,6 @@
 [package]
 name = "async-redis"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["KennyChen <KennyChen6324@gmail.com>"]
 edition = "2018"
 
@@ -13,3 +13,6 @@ mini-redis = "0.4.0"
 async-recursion="0.3.1"
 err-derive = "0.3.0"
 enum_dispatch = "0.3.5"
+
+[profile.release]
+debug = true

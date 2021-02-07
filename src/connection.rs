@@ -21,7 +21,7 @@ impl Connection {
         loop {
             let mut buf = Bytes::from(self.buf.to_vec());
             let origin_len = buf.len();
-            println!("buffer: {:?}, len: {}", &buf, origin_len);
+            // println!("buffer: {:?}, len: {}", &buf, origin_len);
             match protocol::Decode(&mut buf) {
                 Err(FrameError::Incomplete) => {}
                 Err(FrameError::Other(e)) => {
@@ -45,7 +45,7 @@ impl Connection {
 
     pub async fn write_frame(&mut self, frame: &Frame) -> crate::Result<()> {
         let mut frame_byte = Encode(frame)?;
-        println!("encoded frame_byte: {:?}", frame_byte);
+        // println!("encoded frame_byte: {:?}", frame_byte);
         self.stream
             .write_buf(&mut frame_byte)
             .await

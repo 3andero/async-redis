@@ -21,7 +21,7 @@ impl Listener {
         println!("Server Started");
         loop {
             let (stream, _) = self.listener.accept().await?;
-            println!("stream accepted: {:?}", &stream);
+            // println!("stream accepted: {:?}", &stream);
 
             let conn = Connection::new(stream);
 
@@ -35,7 +35,7 @@ impl Listener {
             tokio::spawn(async move {
                 match handler.run().await {
                     Err(e) => {
-                        println!("error occur while handling: {}", e);
+                        // println!("error occur while handling: {}", e);
                     }
                     _ => (),
                 }
@@ -55,7 +55,7 @@ struct Handler {
 impl Handler {
     pub async fn run(&mut self) -> Result<()> {
         while !self.shutdown_begin.is_shutdown() {
-            println!("handling: {:?}", self);
+            // println!("handling: {:?}", self);
             let opt_frame = tokio::select! {
                 _ = self.shutdown_begin.recv() => {
                     return Ok(());
@@ -63,7 +63,7 @@ impl Handler {
                 res = self.connection.read_frame() => res?
             };
 
-            println!("frame received: {:?}", opt_frame);
+            // println!("frame received: {:?}", opt_frame);
             let frame = match opt_frame {
                 Some(f) => f,
                 None => {
@@ -72,9 +72,9 @@ impl Handler {
             };
 
             let command = Command::new(&frame)?;
-            println!("parsed command: {:?}", command);
+            // println!("parsed command: {:?}", command);
             let ret_frame = command.exec(&self.db);
-            println!("ret_frame: {:?}", ret_frame);
+            // println!("ret_frame: {:?}", ret_frame);
             self.connection.write_frame(&ret_frame).await?;
         }
         Ok(())
@@ -99,7 +99,7 @@ pub async fn run(listener: TcpListener, shutdown_signal: impl Future) {
         res = server.run() => {
             match res {
                 Err(e) => {
-                    println!("{}", e);
+                    // println!("{}", e);
                 }
                 _ => ()
             }

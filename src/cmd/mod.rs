@@ -80,7 +80,7 @@ impl Command {
         match &cmd_string.to_lowercase()[..] {
             "get" => Ok(Get::new(&mut parser)?.into()),
             "set" => Ok(Set::new(&mut parser)?.into()),
-            _ => unimplemented!(),
+            _ => Err(Box::new(ParseError::NotString)),
         }
     }
 }
