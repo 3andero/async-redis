@@ -10,10 +10,18 @@ pub struct Set {
 }
 
 impl Set {
-    pub fn new(parser: &mut Parser) -> Result<Set> {
+    pub fn new(parser: &mut CommandParser) -> Result<Set> {
         let k = parser.next_bytes()?.ok_or_else(missing_operand)?;
         let v = parser.next_bytes()?.ok_or_else(missing_operand)?;
-        let expire = parser.next_number()?;
+        let expire = match parser.next_integer()? {
+            Some(v) => {
+                if v < 0 {
+                    return Err(Error::new(CommandError::InvalidOperand));
+                }
+                Some(v as u64)
+            }
+            None => None,
+        };
         Ok(Self {
             key: k,
             val: v,

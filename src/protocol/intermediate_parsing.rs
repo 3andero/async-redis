@@ -1,7 +1,7 @@
-use crate::{cmd, protocol::*};
+use crate::{protocol::*, utils::get_integer};
 use bytes::Bytes;
 use reusable_buf::ReusableBuf;
-use std::{cmp::min, io::Cursor};
+use std::io::Cursor;
 
 #[derive(Debug)]
 pub struct IntermediateToken {
@@ -113,7 +113,8 @@ impl IntermediateToken {
             BULK_STRING_MARK => {
                 if self.expected_len.is_none() {
                     let next_line = self.read_line(buf)?;
-                    let maybe_len = get_integer(&next_line)?;
+                    let maybe_len =
+                        get_integer(&next_line).map_err(|e| FrameError::Invalid(e.to_string()))?;
                     if maybe_len < 0 {
                         self.is_recognized = true;
                         self.is_complete = true;
@@ -131,13 +132,16 @@ impl IntermediateToken {
             }
             INTEGER_MARK => {
                 let next_line = self.read_line(buf)?;
-                self.data = Some(Frame::Integers(get_integer(&next_line)?));
+                self.data = Some(Frame::Integers(
+                    get_integer(&next_line).map_err(|e| FrameError::Invalid(e.to_string()))?,
+                ));
                 self.is_complete = true;
                 self.is_recognized = true;
             }
             ARRAY_MARK => {
                 let next_line = self.read_line(buf)?;
-                let maybe_len = get_integer(&next_line)?;
+                let maybe_len =
+                    get_integer(&next_line).map_err(|e| FrameError::Invalid(e.to_string()))?;
                 if maybe_len < 0 {
                     self.is_recognized = true;
                     self.is_complete = true;
@@ -208,24 +212,4 @@ fn get_line<'a>(cursor: &mut Cursor<&'a [u8]>) -> FrameResult<&'a [u8]> {
 
     cursor.set_position(end as u64);
     Err(FrameError::Incomplete)
-}
-
-pub fn get_integer(line: &Bytes) -> FrameResult<i64> {
-    let (neg, line) = if line.len() == 0 {
-        return Err("Not Digit".into());
-    } else if line[0] == b'-' {
-        (true, &line[1..])
-    } else {
-        (false, &line[..])
-    };
-    let mut res = 0;
-    for v in line {
-        if *v >= b'0' && *v <= b'9' {
-            res = res * 10 + ((*v - b'0') as i64);
-        } else {
-            return Err("Not Digit".into());
-        }
-    }
-
-    Ok(if neg { -res } else { res })
 }
