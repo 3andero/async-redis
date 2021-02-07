@@ -25,6 +25,7 @@ impl Connection {
     pub fn refresh(&mut self, stream: TcpStream, id: u64) {
         self.stream = BufWriter::new(stream);
         self.id = id;
+        self.buf.reset();
     }
 
     pub async fn close_connection(&mut self) {
