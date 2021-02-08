@@ -1,6 +1,6 @@
 [package]
 name = "async-redis"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["KennyChen <KennyChen6324@gmail.com>"]
 edition = "2018"
 

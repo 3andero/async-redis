@@ -19,7 +19,7 @@ impl Connection {
         }
     }
 
-    #[instrument(skip(self))]
+    // #[instrument(skip(self))]
     pub async fn read_frame(&mut self) -> Result<Option<Frame>> {
         loop {
             let mut buf = Bytes::from(self.buf.to_vec());

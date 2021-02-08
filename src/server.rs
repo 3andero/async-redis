@@ -15,7 +15,7 @@ pub struct Listener {
 }
 
 impl Listener {
-    #[instrument(skip(self))]
+    // #[instrument(skip(self))]
     async fn run(&self) -> Result<()> {
         debug!("Server Started");
         loop {
@@ -33,8 +33,8 @@ impl Listener {
 
             tokio::spawn(async move {
                 match handler.run().await {
-                    Err(e) => {
-                        error!("error occur while handling: {}", e);
+                    Err(_) => {
+                        // error!("error occur while handling: {}", e);
                     }
                     _ => (),
                 }
@@ -52,7 +52,7 @@ struct Handler {
 }
 
 impl Handler {
-    #[instrument(skip(self))]
+    // #[instrument(skip(self))]
     pub async fn run(&mut self) -> Result<()> {
         while !self.shutdown_begin.is_shutdown() {
             // debug!("handling: {:?}", self.db.shared.database);
@@ -91,7 +91,7 @@ impl Handler {
     }
 }
 
-#[instrument(skip(shutdown_signal))]
+// #[instrument(skip(shutdown_signal))]
 pub async fn run(listener: TcpListener, shutdown_signal: impl Future) {
     debug!("Serving Entered");
     let (shutdown_begin_tx, _) = broadcast::channel(1);

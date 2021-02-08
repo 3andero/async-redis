@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::info;
 use std::env;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -33,6 +34,7 @@ async fn main() -> Result<()> {
 
     let _ = tracing::subscriber::set_global_default(collector);
 
+    info!("async-redis v0.2.0");
     let addr = addr.parse::<SocketAddr>()?;
     let listener = TcpListener::bind(&addr).await?;
 
