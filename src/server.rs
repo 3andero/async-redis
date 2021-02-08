@@ -152,6 +152,7 @@ impl Listener {
                                 use_error = false;
                             }
                         }
+
                         if use_error {
                             error!("error occured while handling: {}", e);
                         } else {
@@ -196,7 +197,9 @@ impl Handler {
 
             trace!(
                 "[{}]<{}>frame received: {:?}",
-                self.id, self.connection.id, opt_frame
+                self.id,
+                self.connection.id,
+                opt_frame
             );
             let frame = match opt_frame {
                 Some(f) => f,
@@ -222,7 +225,9 @@ impl Handler {
                 Ok(mut cmd) => {
                     trace!(
                         "[{}]<{}>parsed command: {:?}",
-                        self.id, self.connection.id, cmd
+                        self.id,
+                        self.connection.id,
+                        cmd
                     );
                     let nounce = self.dispatcher.counter.fetch_add(1, Relaxed);
                     let (ret_tx, ret_rx) = oneshot::channel();
@@ -244,7 +249,9 @@ impl Handler {
             };
             trace!(
                 "[{}]<{}>ret_frame: {:?}",
-                self.id, self.connection.id, ret_frame
+                self.id,
+                self.connection.id,
+                ret_frame
             );
             self.connection.write_frame(&ret_frame).await?;
         }
