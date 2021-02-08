@@ -326,7 +326,12 @@ pub async fn run(listener: TcpListener, shutdown_signal: impl Future, num_thread
         _ = shutdown_signal => {
             info!("Ctrl+C");
         }
+        _ = tokio::time::sleep(tokio::time::Duration::new(30, 0)) => {
+            info!("Timeout");
+        }
     }
+
+    
 
     let Listener {
         shutdown_begin,
