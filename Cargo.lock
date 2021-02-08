@@ -26,7 +26,7 @@ checksum = "afddf7f520a80dbf76e6f50a35bca42a2331ef227a28b3b6dc5c2e2338d114b1"
 
 [[package]]
 name = "async-redis"
-version = "0.1.0"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -39,6 +39,7 @@ dependencies = [
  "num-traits",
  "num_cpus",
  "rand",
+ "rustc-hash",
  "tokio",
  "tracing",
  "tracing-futures",
@@ -690,6 +691,12 @@ name = "regex-syntax"
 version = "0.6.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b181ba2dcf07aaccad5448e8ead58db5b742cf85dfe035e2227f137a539a189"
+
+[[package]]
+name = "rustc-hash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc_version"

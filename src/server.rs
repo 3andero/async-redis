@@ -7,7 +7,6 @@ use std::{
 };
 
 use bytes::Bytes;
-use core::mem;
 use tokio::{net::TcpListener, spawn, sync::*};
 use tracing::*;
 
@@ -20,8 +19,7 @@ use crate::{
     Result,
 };
 
-const BUFFERSIZE: usize = 100;
-
+#[allow(dead_code)]
 fn calculate_hash<T: Hash>(t: &T) -> usize {
     let mut s = DefaultHasher::new();
     t.hash(&mut s);
@@ -33,7 +31,6 @@ pub struct Dispatcher {
     num_threads: usize,
     counter: AtomicU64,
     tasks_tx: Vec<mpsc::UnboundedSender<TaskParam>>,
-    _shift_param: usize,
 }
 
 impl Dispatcher {
@@ -61,7 +58,6 @@ impl Dispatcher {
             num_threads,
             counter: AtomicU64::new(0),
             tasks_tx,
-            _shift_param: (mem::size_of::<usize>() * 8 - (num_threads.trailing_zeros() as usize)),
         }
     }
 
@@ -88,7 +84,6 @@ pub struct Listener {
 
     shutdown_complete_rx: mpsc::Receiver<()>,
     shutdown_complete_tx: mpsc::Sender<()>,
-    num_threads: usize,
 }
 
 // #[instrument(skip(handler, sender))]
@@ -216,7 +211,7 @@ impl Handler {
                         let (ret_tx, ret_rx) = oneshot::channel();
                         let cmd_copy = cmd.clone();
                         self.dispatcher.tasks_tx[db_id]
-                            .send(TaskParam::Task((cmd_copy, self.id, ret_tx)))?;
+                            .send(TaskParam::Task((cmd_copy, ret_tx)))?;
 
                         ret.push(ret_rx.await.unwrap());
                     }
@@ -234,10 +229,8 @@ impl Handler {
                     cmd.set_nounce(nounce);
                     let db_id = self.dispatcher.determine_database(cmd.get_key());
 
+                    self.dispatcher.tasks_tx[db_id].send(TaskParam::Task((cmd, ret_tx)))?;
 
-                    self.dispatcher.tasks_tx[db_id]
-                        .send(TaskParam::Task((cmd, self.id, ret_tx)))?;
-                    
                     ret_rx.await.unwrap()
                 }
                 Err(e) => match e.downcast_ref::<CommandError>() {
@@ -276,7 +269,6 @@ pub async fn run(listener: TcpListener, shutdown_signal: impl Future, num_thread
         shutdown_begin: shutdown_begin_tx,
         shutdown_complete_rx,
         shutdown_complete_tx,
-        num_threads,
     };
 
     tokio::select! {

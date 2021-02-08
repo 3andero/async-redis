@@ -1,9 +1,10 @@
 use crate::{cmd::*, protocol::Frame};
 use bytes::*;
 use debug::DebugCommand;
+use rustc_hash::FxHashMap;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap};
 use tokio::{
     select,
     sync::{broadcast, mpsc, oneshot},
@@ -18,7 +19,7 @@ pub enum DBReturn {
 
 #[derive(Debug)]
 pub enum TaskParam {
-    Task((Command, u64, oneshot::Sender<Frame>)),
+    Task((Command, oneshot::Sender<Frame>)),
 }
 
 #[derive(Debug)]
@@ -30,7 +31,7 @@ pub struct Entry {
 
 #[derive(Debug)]
 pub struct DB {
-    pub database: HashMap<Bytes, Entry>,
+    pub database: FxHashMap<Bytes, Entry>,
     pub expiration: BTreeMap<(Instant, u64), Bytes>,
     pub when: Option<Instant>,
     pub id: usize,
@@ -39,7 +40,7 @@ pub struct DB {
 impl DB {
     fn new(id: usize) -> Self {
         Self {
-            database: HashMap::new(),
+            database: FxHashMap::default(),
             expiration: BTreeMap::new(),
             when: None,
             id,
@@ -93,7 +94,6 @@ impl DB {
                 }
                 return DBReturn::List(res);
             }
-            _ => DBReturn::Single(None),
         }
     }
 
@@ -131,7 +131,7 @@ pub async fn database_manager(
                 if res.is_none() {
                     continue;
                 }
-                let (cmd, handler_id, ret_tx) = match res.unwrap() {
+                let (cmd, ret_tx) = match res.unwrap() {
                     TaskParam::Task(v) => v,
                 };
                 trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
