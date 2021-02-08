@@ -32,7 +32,7 @@ fn calculate_hash<T: Hash>(t: &T) -> usize {
 pub struct Dispatcher {
     num_threads: usize,
     counter: AtomicU64,
-    tasks_tx: Vec<mpsc::Sender<TaskParam>>,
+    tasks_tx: Vec<mpsc::UnboundedSender<TaskParam>>,
     _shift_param: usize,
 }
 
@@ -45,7 +45,7 @@ impl Dispatcher {
         let mut tasks_tx = Vec::with_capacity(num_threads);
         let mut tasks_rx = Vec::with_capacity(num_threads);
         for _ in 0..num_threads {
-            let (tx, rx) = mpsc::channel(BUFFERSIZE);
+            let (tx, rx) = mpsc::unbounded_channel();
             tasks_tx.push(tx);
             tasks_rx.push(rx);
         }
@@ -65,19 +65,20 @@ impl Dispatcher {
         }
     }
 
-    pub fn determine_database(&self, key: &Bytes) -> usize {
-        // Leave the high 7 bits for the HashBrown SIMD tag.
-        (calculate_hash(key) << 7) >> self._shift_param
-    }
-
     // pub fn determine_database(&self, key: &Bytes) -> usize {
     //     // Leave the high 7 bits for the HashBrown SIMD tag.
-    //     let mut hash = 0;
-    //     for b in key {
-    //         hash = (hash + *b as usize) % self.num_partition;
-    //     }
-    //     hash
+    //     // (calculate_hash(key) << 7) >> self._shift_param
+    //     calculate_hash(key) % self.num_threads
     // }
+
+    pub fn determine_database(&self, key: &Bytes) -> usize {
+        // Leave the high 7 bits for the HashBrown SIMD tag.
+        let mut hash = 0;
+        for b in key {
+            hash = (hash + *b as usize) % self.num_threads;
+        }
+        hash
+    }
 }
 pub struct Listener {
     listener: TcpListener,
@@ -93,28 +94,6 @@ pub struct Listener {
 // #[instrument(skip(handler, sender))]
 async fn recycle_handler(mut handler: Handler, sender: mpsc::Sender<Handler>) -> bool {
     debug!("[{}]: entered", handler.id);
-    handler.age += 1;
-    if handler.age % 10 == 0 {
-        for db_id in 0..handler.sent.len() {
-            debug!("[{}]: checking db({})", handler.id, db_id);
-            handler.sent[db_id] = if handler.sent[db_id] == 0 {
-                debug!("[{}]: removing ret_tx from {}", handler.id, db_id);
-                match handler.dispatcher.tasks_tx[db_id].try_send(TaskParam::Remove(handler.id)) {
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        error!(
-                            "background task's closed while recycling handler[{}]",
-                            handler.id
-                        );
-                        return false; // no longer need this handler
-                    }
-                    Ok(_) => -1, // recycled
-                    _ => 0,      // Not yet recycled, just keep it.
-                }
-            } else {
-                0
-            };
-        }
-    }
     debug!("[{}]: send to recycle channel", handler.id);
     let id = handler.id;
     handler.connection.close_connection().await;
@@ -153,17 +132,12 @@ impl Listener {
                 let conn = Connection::new(stream, conn_id);
                 float_num += 1;
                 debug!("<{}>: new handler[{}]", conn_id, float_num);
-                let (ret_tx, ret_rx) = mpsc::channel(1);
                 Handler {
                     connection: conn,
                     dispatcher: self.dispatcher.clone(),
                     shutdown_begin: Shutdown::new(self.shutdown_begin.subscribe()),
-                    sent: vec![-1; self.num_threads],
-                    ret_rx,
-                    ret_tx,
                     shutdown_complete_tx: self.shutdown_complete_tx.clone(),
                     id: float_num,
-                    age: 0,
                 }
             };
 
@@ -202,11 +176,11 @@ struct Handler {
     dispatcher: Arc<Dispatcher>,
     shutdown_begin: Shutdown,
     shutdown_complete_tx: mpsc::Sender<()>,
-    sent: Vec<i32>,
-    ret_tx: mpsc::Sender<Frame>,
-    ret_rx: mpsc::Receiver<Frame>,
+    // sent: Vec<i32>,
+    // ret_tx: mpsc::Sender<Frame>,
+    // ret_rx: mpsc::Receiver<Frame>,
     id: u64,
-    age: u32,
+    // age: u32,
 }
 
 impl Handler {
@@ -236,19 +210,12 @@ impl Handler {
                 Ok(cmd @ Command::Debug(_)) => {
                     let mut ret = Vec::with_capacity(self.dispatcher.num_threads);
                     for db_id in 0..self.dispatcher.num_threads {
-                        let option_tx = if self.sent[db_id] == -1 {
-                            Some(self.ret_tx.clone())
-                        } else {
-                            None
-                        };
+                        let (ret_tx, ret_rx) = oneshot::channel();
                         let cmd_copy = cmd.clone();
                         self.dispatcher.tasks_tx[db_id]
-                            .send(TaskParam::Task((cmd_copy, self.id, option_tx)))
-                            .await?;
+                            .send(TaskParam::Task((cmd_copy, self.id, ret_tx)))?;
 
-                        self.sent[db_id] = std::cmp::max(self.sent[db_id] + 1, 1);
-
-                        ret.push(self.ret_rx.recv().await.unwrap());
+                        ret.push(ret_rx.await.unwrap());
                     }
                     Frame::Arrays(FrameArrays::new(ret))
                 }
@@ -258,23 +225,15 @@ impl Handler {
                         self.id, self.connection.id, cmd
                     );
                     let nounce = self.dispatcher.counter.fetch_add(1, Relaxed);
-
+                    let (ret_tx, ret_rx) = oneshot::channel();
                     cmd.set_nounce(nounce);
                     let db_id = self.dispatcher.determine_database(cmd.get_key());
 
-                    let option_tx = if self.sent[db_id] == -1 {
-                        Some(self.ret_tx.clone())
-                    } else {
-                        None
-                    };
 
                     self.dispatcher.tasks_tx[db_id]
-                        .send(TaskParam::Task((cmd, self.id, option_tx)))
-                        .await?;
-
-                    self.sent[db_id] = std::cmp::max(self.sent[db_id] + 1, 1);
-
-                    self.ret_rx.recv().await.unwrap()
+                        .send(TaskParam::Task((cmd, self.id, ret_tx)))?;
+                    
+                    ret_rx.await.unwrap()
                 }
                 Err(e) => match e.downcast_ref::<CommandError>() {
                     Some(e) => Frame::Errors(format!("{}", e).into()),
