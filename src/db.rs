@@ -5,7 +5,7 @@ use rand::thread_rng;
 use std::collections::{BTreeMap, HashMap};
 use tokio::{
     select,
-    sync::{broadcast, mpsc},
+    sync::{broadcast, mpsc, oneshot},
     time::{Duration, Instant},
 };
 use tracing::{debug, info, trace};
@@ -17,8 +17,7 @@ pub enum DBReturn {
 
 #[derive(Debug)]
 pub enum TaskParam {
-    Task((Command, u64, Option<mpsc::Sender<Frame>>)),
-    Remove(u64),
+    Task((Command, u64, oneshot::Sender<Frame>)),
 }
 
 #[derive(Debug)]
@@ -110,14 +109,13 @@ impl DB {
 }
 
 pub async fn database_manager(
-    mut tasks_rx: mpsc::Receiver<TaskParam>,
+    mut tasks_rx: mpsc::UnboundedReceiver<TaskParam>,
     mut shutdown: broadcast::Receiver<()>,
     _shutdown_complete_tx: mpsc::Sender<()>,
     taskid: usize,
 ) {
     let mut when: Option<Instant> = None;
     let mut db = DB::new(taskid);
-    let mut registered_handler = BTreeMap::new();
     info!("[{}] starting backgroud task", taskid);
 
     loop {
@@ -132,20 +130,11 @@ pub async fn database_manager(
                 if res.is_none() {
                     continue;
                 }
-                let (cmd, handler_id, maybe_ret_tx) = match res.unwrap() {
-                    TaskParam::Remove(handler_id) => {
-                        registered_handler.remove(&handler_id);
-                        continue;
-                    }
+                let (cmd, handler_id, ret_tx) = match res.unwrap() {
                     TaskParam::Task(v) => v,
                 };
-                if registered_handler.get(&handler_id).is_none() {
-                    let t = maybe_ret_tx.unwrap();
-                    registered_handler.insert(handler_id, t);
-                }
-                let ret_tx = registered_handler.get(&handler_id).unwrap();
                 trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
-                let _ = ret_tx.send(cmd.exec(&mut db)).await;
+                let _ = ret_tx.send(cmd.exec(&mut db));
             }
             _ = tokio::time::sleep_until(
                 when.map(|v| v.max(now + Duration::new(10, 0)))
@@ -166,14 +155,6 @@ pub async fn database_manager(
                         }
                     }
                 }
-
-                if registered_handler.len() > 0 {
-                    registered_handler = registered_handler
-                        .into_iter()
-                        .filter(|(_, b)| !b.is_closed())
-                        .collect();
-                }
-
             }
         }
     }
