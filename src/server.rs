@@ -65,19 +65,20 @@ impl Dispatcher {
         }
     }
 
-    pub fn determine_database(&self, key: &Bytes) -> usize {
-        // Leave the high 7 bits for the HashBrown SIMD tag.
-        (calculate_hash(key) << 7) >> self._shift_param
-    }
-
     // pub fn determine_database(&self, key: &Bytes) -> usize {
     //     // Leave the high 7 bits for the HashBrown SIMD tag.
-    //     let mut hash = 0;
-    //     for b in key {
-    //         hash = (hash + *b as usize) % self.num_partition;
-    //     }
-    //     hash
+    //     // (calculate_hash(key) << 7) >> self._shift_param
+    //     calculate_hash(key) % self.num_threads
     // }
+
+    pub fn determine_database(&self, key: &Bytes) -> usize {
+        // Leave the high 7 bits for the HashBrown SIMD tag.
+        let mut hash = 0;
+        for b in key {
+            hash = (hash + *b as usize) % self.num_threads;
+        }
+        hash
+    }
 }
 pub struct Listener {
     listener: TcpListener,
@@ -90,7 +91,7 @@ pub struct Listener {
     num_threads: usize,
 }
 
-#[instrument(skip(handler, sender))]
+// #[instrument(skip(handler, sender))]
 async fn recycle_handler(mut handler: Handler, sender: mpsc::Sender<Handler>) -> bool {
     debug!("[{}]: entered", handler.id);
     handler.age += 1;
@@ -124,7 +125,7 @@ async fn recycle_handler(mut handler: Handler, sender: mpsc::Sender<Handler>) ->
 }
 
 impl Listener {
-    #[instrument(skip(self))]
+    // #[instrument(skip(self))]
     async fn run(&self) -> Result<()> {
         let mut float_num: u64 = 0;
         let mut conn_id: u64 = 0;
@@ -137,7 +138,6 @@ impl Listener {
             let (stream, _) = self.listener.accept().await?;
             debug!("<{}>: stream accepted", conn_id);
 
-            let conn = Connection::new(stream, conn_id);
             debug!(
                 "<{}>: recycle_rx: {:?}, channel_counter: {:?}",
                 conn_id, recycle_rx, channel_counter
@@ -148,9 +148,10 @@ impl Listener {
             {
                 let mut ret: Handler = recycle_rx.recv().await.unwrap();
                 debug!("<{}>: recv succeed, handler[{}]", conn_id, ret.id);
-                ret.connection = conn;
+                ret.connection.refresh(stream, conn_id);
                 ret
             } else {
+                let conn = Connection::new(stream, conn_id);
                 float_num += 1;
                 debug!("<{}>: new handler[{}]", conn_id, float_num);
                 let (ret_tx, ret_rx) = mpsc::channel(1);
@@ -210,7 +211,7 @@ struct Handler {
 }
 
 impl Handler {
-    #[instrument(skip(self))]
+    // #[instrument(skip(self))]
     pub async fn run(&mut self) -> Result<()> {
         while !self.shutdown_begin.is_shutdown() {
             let opt_frame = tokio::select! {
@@ -220,7 +221,7 @@ impl Handler {
                 res = self.connection.read_frame() => res?
             };
 
-            debug!(
+            trace!(
                 "[{}]<{}>frame received: {:?}",
                 self.id, self.connection.id, opt_frame
             );
@@ -231,7 +232,7 @@ impl Handler {
                 }
             };
 
-            let command = Command::new(&frame);
+            let command = Command::new(frame);
             let ret_frame = match command {
                 Ok(cmd @ Command::Debug(_)) => {
                     let mut ret = Vec::with_capacity(self.dispatcher.num_threads);
@@ -253,7 +254,7 @@ impl Handler {
                     Frame::Arrays(FrameArrays::new(ret))
                 }
                 Ok(mut cmd) => {
-                    debug!(
+                    trace!(
                         "[{}]<{}>parsed command: {:?}",
                         self.id, self.connection.id, cmd
                     );
@@ -283,7 +284,7 @@ impl Handler {
                     }
                 },
             };
-            debug!(
+            trace!(
                 "[{}]<{}>ret_frame: {:?}",
                 self.id, self.connection.id, ret_frame
             );
@@ -293,7 +294,7 @@ impl Handler {
     }
 }
 
-#[instrument(skip(listener, shutdown_signal))]
+// #[instrument(skip(listener, shutdown_signal))]
 pub async fn run(listener: TcpListener, shutdown_signal: impl Future, num_threads: usize) {
     info!("Service Starting");
     let (shutdown_begin_tx, _) = broadcast::channel(1);

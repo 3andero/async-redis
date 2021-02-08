@@ -1,5 +1,7 @@
-use crate::protocol::*;
+use crate::{protocol::*, utils::get_integer};
+
 use intermediate_parsing::*;
+use reusable_buf::*;
 
 #[derive(Debug)]
 pub struct IntermediateParser {
@@ -13,7 +15,7 @@ impl IntermediateParser {
         }
     }
 
-    pub fn parse(&mut self, buf: &mut BytesMut) -> FrameResult<Frame> {
+    pub fn parse(&mut self, buf: &mut ReusableBuf) -> FrameResult<Frame> {
         loop {
             // println!("stack: {:?}", self.token_stack);
             if self.token_stack.len() == 0
@@ -49,6 +51,7 @@ impl IntermediateParser {
     }
 }
 
+#[allow(dead_code)]
 pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
     if buf.len() == 0 {
         return Err(FrameError::Incomplete);
@@ -65,12 +68,12 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
         }
         b':' => {
             let next_line = get_line(buf)?;
-            let res = get_integer(&next_line)?;
+            let res = get_integer(&next_line).map_err(|e| FrameError::Other(e))?;
             Ok(Frame::Integers(res))
         }
         b'$' => {
             let mut next_line = get_line(buf)?;
-            let len = get_integer(&next_line)?;
+            let len = get_integer(&next_line).map_err(|e| FrameError::Other(e))?;
             let res = if len == -1 {
                 Frame::NullString
             } else {
@@ -84,7 +87,7 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
         }
         b'*' => {
             let next_line = get_line(buf)?;
-            let len = get_integer(&next_line)?;
+            let len = get_integer(&next_line).map_err(|e| FrameError::Other(e))?;
             let res = if len == -1 {
                 Frame::NullString
             } else {
@@ -103,6 +106,7 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
     }
 }
 
+#[allow(dead_code)]
 fn get_line(buf: &mut Bytes) -> FrameResult<Bytes> {
     let mut matched = false;
     for (pos, bt) in buf.iter().enumerate() {

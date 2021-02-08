@@ -1,6 +1,6 @@
 use crate::protocol::*;
 use anyhow::{Error, Result};
-use bytes::BytesMut;
+use reusable_buf::ReusableBuf;
 use tokio::io::*;
 use tokio::net::*;
 use tracing::*;
@@ -8,7 +8,7 @@ use tracing::*;
 #[derive(Debug)]
 pub struct Connection {
     stream: BufWriter<TcpStream>,
-    buf: BytesMut,
+    buf: ReusableBuf,
     pub id: u64,
 }
 
@@ -16,9 +16,15 @@ impl Connection {
     pub fn new(stream: TcpStream, id: u64) -> Self {
         Self {
             stream: BufWriter::new(stream),
-            buf: BytesMut::new(),
+            buf: ReusableBuf::new(),
             id,
         }
+    }
+
+    pub fn refresh(&mut self, stream: TcpStream, id: u64) {
+        self.stream = BufWriter::new(stream);
+        self.id = id;
+        self.buf.reset();
     }
 
     pub async fn close_connection(&mut self) {
@@ -26,11 +32,11 @@ impl Connection {
         let _ = self.stream.shutdown().await;
     }
 
-    #[instrument(skip(self))]
+    // #[instrument(skip(self))]
     pub async fn read_frame(&mut self) -> Result<Option<Frame>> {
         let mut parser = decode::IntermediateParser::new();
         loop {
-            debug!("<{}>buffer: {:?}", self.id, &self.buf);
+            trace!("<{}>buffer: {:?}", self.id, &self.buf);
             match parser.parse(&mut self.buf) {
                 Err(FrameError::Incomplete) => {}
                 Err(FrameError::Other(e)) => {
@@ -59,7 +65,7 @@ impl Connection {
 
     pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
         let frame_byte = encode::encode(frame)?;
-        debug!("<{}>encoded frame_byte: {:?}", self.id, frame_byte);
+        trace!("<{}>encoded frame_byte: {:?}", self.id, frame_byte);
         self.stream
             .write_all(&frame_byte)
             .await

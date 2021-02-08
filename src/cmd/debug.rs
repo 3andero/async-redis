@@ -8,7 +8,7 @@ pub struct Debug {
 }
 
 impl Debug {
-    pub fn new(parser: &mut Parser) -> Result<Debug> {
+    pub fn new(parser: &mut CommandParser) -> Result<Debug> {
         Ok(Self {
             key: parser.next_bytes()?.ok_or_else(missing_operand)?,
         })

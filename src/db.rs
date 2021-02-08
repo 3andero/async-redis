@@ -8,7 +8,7 @@ use tokio::{
     sync::{broadcast, mpsc},
     time::{Duration, Instant},
 };
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 pub enum DBReturn {
     Single(Option<Bytes>),
@@ -126,7 +126,6 @@ pub async fn database_manager(
         select! {
             _ = shutdown.recv() => {
                 info!("[{}] shutting down backgroud task", taskid);
-                drop(db);
                 return;
             }
             res = tasks_rx.recv() => {
@@ -145,7 +144,7 @@ pub async fn database_manager(
                     registered_handler.insert(handler_id, t);
                 }
                 let ret_tx = registered_handler.get(&handler_id).unwrap();
-                debug!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
+                trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
                 let _ = ret_tx.send(cmd.exec(&mut db)).await;
             }
             _ = tokio::time::sleep_until(
@@ -160,7 +159,7 @@ pub async fn database_manager(
                         if expire_next <= now {
                             let key = db.expiration.remove(&(expire_next, id)).unwrap();
                             db.database.remove(&key);
-                            debug!("[{}] collecting expired key({:?}): {:?}", taskid, &now, &key);
+                            trace!("[{}] collecting expired key({:?}): {:?}", taskid, &now, &key);
                         } else {
                             when = Some(expire_next);
                             break;
