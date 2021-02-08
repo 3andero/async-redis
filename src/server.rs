@@ -65,19 +65,20 @@ impl Dispatcher {
         }
     }
 
-    pub fn determine_database(&self, key: &Bytes) -> usize {
-        // Leave the high 7 bits for the HashBrown SIMD tag.
-        (calculate_hash(key) << 7) >> self._shift_param
-    }
-
     // pub fn determine_database(&self, key: &Bytes) -> usize {
     //     // Leave the high 7 bits for the HashBrown SIMD tag.
-    //     let mut hash = 0;
-    //     for b in key {
-    //         hash = (hash + *b as usize) % self.num_partition;
-    //     }
-    //     hash
+    //     // (calculate_hash(key) << 7) >> self._shift_param
+    //     calculate_hash(key) % self.num_threads
     // }
+
+    pub fn determine_database(&self, key: &Bytes) -> usize {
+        // Leave the high 7 bits for the HashBrown SIMD tag.
+        let mut hash = 0;
+        for b in key {
+            hash = (hash + *b as usize) % self.num_threads;
+        }
+        hash
+    }
 }
 pub struct Listener {
     listener: TcpListener,

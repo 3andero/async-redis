@@ -20,6 +20,8 @@ num_cpus = "1.13.0"
 num-traits = "0.2.14"
 clap = "2.33.3"
 rand = "0.8.3"
+rustc-hash = "*"
+jemallocator = "0.3.2"
 
 [http]
 proxy = "127.0.0.1:7890"

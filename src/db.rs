@@ -126,7 +126,6 @@ pub async fn database_manager(
         select! {
             _ = shutdown.recv() => {
                 info!("[{}] shutting down backgroud task", taskid);
-                drop(db);
                 return;
             }
             res = tasks_rx.recv() => {
