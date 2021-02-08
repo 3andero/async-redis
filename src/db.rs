@@ -1,5 +1,6 @@
 use crate::{cmd::*, protocol::Frame};
 use bytes::*;
+use debug::DebugCommand;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use std::collections::{BTreeMap, HashMap};
@@ -53,30 +54,30 @@ impl DB {
             .map(|v| v.data.clone())
     }
 
-    pub fn debug(&self, key: &Bytes) -> DBReturn {
-        match &key.to_ascii_lowercase()[..] {
-            b"key_num" => {
+    pub fn debug(&self, key: &DebugCommand) -> DBReturn {
+        match key {
+            DebugCommand::KeyNum => {
                 return DBReturn::Single(Some(Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.len()
                 ))));
             }
-            b"total_key_len" => {
+            DebugCommand::TotalKeyLen => {
                 return DBReturn::Single(Some(Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.keys().fold(0, |res, b| res + b.len())
                 ))));
             }
-            b"total_val_len" => {
+            DebugCommand::TotalValLen => {
                 return DBReturn::Single(Some(Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.values().fold(0, |res, b| res + b.data.len())
                 ))));
             }
-            b"random_keys" => {
+            DebugCommand::RandomKeys => {
                 const TAKE: usize = 5;
                 let mut idxs: Vec<usize> = (0..self.database.len()).collect();
                 idxs.shuffle(&mut thread_rng());
