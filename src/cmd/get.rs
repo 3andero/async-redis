@@ -3,7 +3,7 @@ use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct Get {
-    key: Bytes,
+    key: Box<Bytes>,
     nounce: u64,
 }
 
@@ -17,7 +17,7 @@ impl Get {
 }
 
 impl ExecDB for Get {
-    fn exec(&self, db: &mut DB) -> Frame {
+    fn exec(self, db: &mut DB) -> Frame {
         db.get(&self.key).into()
     }
 

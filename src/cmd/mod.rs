@@ -23,7 +23,7 @@ pub enum Command {
 
 #[enum_dispatch(Command)]
 pub trait ExecDB {
-    fn exec(&self, db: &mut DB) -> Frame;
+    fn exec(self, db: &mut DB) -> Frame;
     fn get_key(&self) -> &Bytes;
     fn set_nounce(&mut self, nounce: u64);
 }
@@ -77,7 +77,7 @@ impl CommandParser {
         self.frames.next()
     }
 
-    fn next_bytes(&mut self) -> Result<Option<Bytes>> {
+    fn next_bytes(&mut self) -> Result<Option<Box<Bytes>>> {
         let next_frame = match self.next() {
             Some(x) => x,
             None => {

@@ -3,8 +3,8 @@ use anyhow::Result;
 use tokio::time::{Duration, Instant};
 #[derive(Debug, Clone)]
 pub struct Set {
-    key: Bytes,
-    val: Bytes,
+    key: Box<Bytes>,
+    val: Box<Bytes>,
     expiration: Option<u64>,
     nounce: u64,
 }
@@ -32,11 +32,11 @@ impl Set {
 }
 
 impl ExecDB for Set {
-    fn exec(&self, db: &mut DB) -> Frame {
+    fn exec(self, db: &mut DB) -> Frame {
         let now = Instant::now();
         let expiration = self.expiration.map(|v| now + Duration::new(v, 0));
         if expiration.is_none() {
-            db.set(self.key.clone(), self.val.clone(), self.nounce, None);
+            db.set(*self.key, *self.val, self.nounce, None);
             return Frame::Ok;
         }
         let expiration = expiration.unwrap();
@@ -44,14 +44,14 @@ impl ExecDB for Set {
             return Frame::Ok;
         } else {
             db.set(
-                self.key.clone(),
-                self.val.clone(),
+                *self.key.clone(),
+                *self.val,
                 self.nounce,
                 Some(expiration),
             );
         }
         db.expiration
-            .insert((expiration, self.nounce), self.key.clone());
+            .insert((expiration, self.nounce), *self.key);
 
         db.when
             .map_or_else(|| Some(expiration), |v| Some(v.min(expiration)));

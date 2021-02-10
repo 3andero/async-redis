@@ -17,7 +17,7 @@ pub struct FrameArrays {
     _initialized: bool,
 }
 
-const SMALL_BYTES_THRESHOLD: usize = 0;
+const SMALL_BYTES_THRESHOLD: usize = 64;
 
 impl FrameArrays {
     pub fn new(val: Vec<Frame>) -> Self {
@@ -52,10 +52,10 @@ impl FrameArrays {
 
 #[derive(Debug)]
 pub enum Frame {
-    SimpleString(Bytes),
-    Errors(Bytes),
+    SimpleString(Box<Bytes>),
+    Errors(Box<Bytes>),
     Integers(i64),
-    BulkStrings(Bytes),
+    BulkStrings(Box<Bytes>),
     NullString,
     Arrays(FrameArrays),
     Ok,
@@ -64,7 +64,7 @@ pub enum Frame {
 
 impl From<Bytes> for Frame {
     fn from(bt: Bytes) -> Frame {
-        return Frame::BulkStrings(bt);
+        return Frame::BulkStrings(Box::new(bt));
     }
 }
 
@@ -161,13 +161,13 @@ const DLEM_MARK: &'static [u8] = b"\r\n";
 
 #[macro_export]
 macro_rules! FrameTests {
-    (DisplayDecodeFn $($cmd:expr),*) => {
-        let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
-        for param in params.iter_mut() {
-            let res = decode(&mut param.clone());
-            println!("{:?} => {:?}", param, res);
-        }
-    };
+    // (DisplayDecodeFn $($cmd:expr),*) => {
+    //     let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
+    //     for param in params.iter_mut() {
+    //         let res = decode(&mut param.clone());
+    //         println!("{:?} => {:?}", param, res);
+    //     }
+    // };
     (DisplayIntermediateParser $($cmd:expr),*) => {
         let mut params = vec![$($cmd,)*];
         for param in params.iter_mut() {
@@ -209,21 +209,6 @@ mod tests {
     use crate::protocol::*;
     use decode::*;
     use encode::*;
-    #[test]
-    fn displays_decode() {
-        FrameTests!(DisplayDecodeFn
-            "*0\r\n",
-            "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
-            "*3\r\n:1\r\n:2\r\n:3\r\n",
-            "*-1\r\n",
-            "*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n",
-            "$6\r\nfoobar\r\n",
-            "+OK\r\n",
-            "$3\r\nfoobar\r\n",
-            "$6\r\nfoar\r\n",
-            "$6\r\rfoobar\r\n"
-        );
-    }
 
     #[test]
     fn displays_parser() {

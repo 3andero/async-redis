@@ -230,7 +230,7 @@ impl Handler {
                     ret_rx.await.unwrap()
                 }
                 Err(e) => match e.downcast_ref::<CommandError>() {
-                    Some(e) => Frame::Errors(format!("{}", e).into()),
+                    Some(e) => Frame::Errors(Bytes::from(format!("{}", e)).into()),
                     None => {
                         return Err(e);
                     }

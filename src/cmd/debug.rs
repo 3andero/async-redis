@@ -5,7 +5,7 @@ use anyhow::Result;
 #[derive(Debug, Clone)]
 pub struct Debug {
     key: DebugCommand,
-    origin_key: Bytes,
+    origin_key: Box<Bytes>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,7 +36,7 @@ impl Debug {
 }
 
 impl ExecDB for Debug {
-    fn exec(&self, db: &mut DB) -> Frame {
+    fn exec(self, db: &mut DB) -> Frame {
         match db.debug(&self.key) {
             DBReturn::List(arr) => arr.into(),
             DBReturn::Single(opt_b) => opt_b.into(),

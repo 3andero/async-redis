@@ -101,12 +101,12 @@ impl IntermediateToken {
         // println!("token: {}, buf: {:?}", self.token_type as char, buf);
         match self.token_type {
             SIMPLE_STRING_MARK => {
-                self.data = Some(Frame::SimpleString(self.read_line(buf)?));
+                self.data = Some(Frame::SimpleString(Box::new(self.read_line(buf)?)));
                 self.is_recognized = true;
                 self.is_complete = true;
             }
             ERROR_MARK => {
-                self.data = Some(Frame::Errors(self.read_line(buf)?));
+                self.data = Some(Frame::Errors(Box::new(self.read_line(buf)?)));
                 self.is_recognized = true;
                 self.is_complete = true;
             }
@@ -126,7 +126,7 @@ impl IntermediateToken {
                     }
                 }
 
-                self.data = Some(Frame::BulkStrings(self.read_expected(buf)?));
+                self.data = Some(Frame::BulkStrings(Box::new(self.read_expected(buf)?)));
                 self.is_complete = true;
                 self.is_recognized = true;
             }
