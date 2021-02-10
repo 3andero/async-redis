@@ -172,11 +172,7 @@ struct Handler {
     dispatcher: Arc<Dispatcher>,
     shutdown_begin: Shutdown,
     shutdown_complete_tx: mpsc::Sender<()>,
-    // sent: Vec<i32>,
-    // ret_tx: mpsc::Sender<Frame>,
-    // ret_rx: mpsc::Receiver<Frame>,
     id: u64,
-    // age: u32,
 }
 
 impl Handler {

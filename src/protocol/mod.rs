@@ -17,6 +17,8 @@ pub struct FrameArrays {
     _initialized: bool,
 }
 
+const SMALL_BYTES_THRESHOLD: usize = 0;
+
 impl FrameArrays {
     pub fn new(val: Vec<Frame>) -> Self {
         let (_raw_bytes_length, _msg_length, _msg_num) =
@@ -93,7 +95,13 @@ impl Frame {
     fn msg_len(&self) -> usize {
         match self {
             Frame::Ok | Frame::NullString | Frame::NullArray => 5,
-            Frame::SimpleString(v) | Frame::Errors(v) | Frame::BulkStrings(v) => v.len(),
+            Frame::SimpleString(v) | Frame::Errors(v) | Frame::BulkStrings(v) => {
+                if v.len() > SMALL_BYTES_THRESHOLD {
+                    v.len()
+                } else {
+                    0
+                }
+            }
             Frame::Arrays(v) => v._msg_length,
             _ => 0,
         }
@@ -101,12 +109,14 @@ impl Frame {
 
     fn msg_num(&self) -> usize {
         match self {
-            Frame::Ok
-            | Frame::NullString
-            | Frame::NullArray
-            | Frame::SimpleString(_)
-            | Frame::Errors(_)
-            | Frame::BulkStrings(_) => 1,
+            Frame::Ok | Frame::NullString | Frame::NullArray => 0,
+            Frame::SimpleString(b) | Frame::Errors(b) | Frame::BulkStrings(b) => {
+                if b.len() > SMALL_BYTES_THRESHOLD {
+                    1
+                } else {
+                    0
+                }
+            }
             Frame::Arrays(v) => v._msg_num,
             _ => 0,
         }
@@ -139,9 +149,9 @@ impl From<&str> for FrameError {
 
 type FrameResult<T> = std::result::Result<T, FrameError>;
 
-const NIL_STRING_FRAME: &'static [u8] = b"$-1\r\n";
-const NIL_ARRAY_FRAME: &'static [u8] = b"*-1\r\n";
-const OK_FRAME: &'static [u8] = b"+OK\r\n";
+pub const NIL_STRING_FRAME: &'static [u8] = b"$-1\r\n";
+pub const NIL_ARRAY_FRAME: &'static [u8] = b"*-1\r\n";
+pub const OK_FRAME: &'static [u8] = b"+OK\r\n";
 const SIMPLE_STRING_MARK: u8 = b'+';
 const ERROR_MARK: u8 = b'-';
 const BULK_STRING_MARK: u8 = b'$';
@@ -173,13 +183,13 @@ macro_rules! FrameTests {
         let mut params = vec![$($cmd,)*];
         let mut buf = reusable_buf::ReusableBuf::new();
         for param in params.iter_mut() {
+            buf.reset();
             buf.reserve(param.len());
             buf.put_slice(&param.as_bytes());
             let mut parser = decode::IntermediateParser::new();
             let (res, err_msg) = match parser.parse(&mut buf) {
                 Ok(v) => (v, String::from("")),
                 Err(e) => {
-                    buf.reset();
                     (Frame::NullString, format!("{:?}", e))
                 }
             };

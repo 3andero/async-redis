@@ -16,7 +16,7 @@ use clap::{App, Arg};
 #[tokio::main]
 async fn main() -> Result<()> {
     let matches = App::new("async-redis")
-        .version("0.4.3")
+        .version("0.6.0")
         .arg(
             Arg::with_name("port")
                 .short("p")
