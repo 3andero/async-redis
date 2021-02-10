@@ -1,0 +1,419 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="566" onload="init(evt)" viewBox="0 0 1200 566" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:"Verdana"; font-size:12px; fill:rgb(0,0,0); }
+#title { text-anchor:middle; font-size:17px; }
+#search { opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[var nametype = 'Function:';
+var fontsize = 12;
+var fontwidth = 0.59;
+var xpad = 10;
+var inverted = false;
+var searchcolor = 'rgb(230,0,230)';
+var fluiddrawing = true;
+var truncate_text_right = false;]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+          svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            var el = frames.children;
+            for(var i = 0; i < el.length; i++) {
+                update_text(el[i]);
+            }
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad - 100;
+            matchedtxt.attributes.x.value = svgWidth - xpad - 100;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+            var params = get_params()
+            params.x = el.attributes._orig_x.value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["_orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("_orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["_orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+    e.removeAttribute("_orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (/^ *\$/.test(txt) || t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.attributes != undefined) {
+        orig_load(e, "x");
+        orig_load(e, "width");
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, ratio) {
+    if (e.attributes != undefined) {
+        if (e.attributes.x != undefined) {
+            orig_save(e, "x");
+            e.attributes.x.value = format_percent((parseFloat(e.attributes.x.value) - x) * ratio);
+            if (e.tagName == "text") {
+                e.attributes.x.value = format_percent(parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value) + (100 * 3 / frames.attributes.width.value));
+            }
+        }
+        if (e.attributes.width != undefined) {
+            orig_save(e, "width");
+            e.attributes.width.value = format_percent(parseFloat(e.attributes.width.value) * ratio);
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, ratio);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            orig_save(e, "x");
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            orig_save(e, "width");
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseFloat(attr.width.value);
+    var xmin = parseFloat(attr.x.value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    var ratio = 100 / width;
+    // XXX: Workaround for JavaScript float issues (fix me)
+    var fudge = 0.001;
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseFloat(a.x.value);
+        var ew = parseFloat(a.width.value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                update_text(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex + fudge >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, ratio);
+                update_text(e);
+            }
+        }
+    }
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+        update_text(el[i]);
+    }
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseFloat(rect.attributes.width.value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseFloat(rect.attributes.x.value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    var fudge = 0.0001;    // JavaScript floating point
+    for (var k in keys) {
+        var x = parseFloat(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw - fudge) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="566" fill="url(#background)"/><text id="title" x="50.0000%" y="24.00">Flame Graph</text><text id="details" x="10" y="549.00"> </text><text id="unzoom" class="hide" x="10" y="24.00">Reset Zoom</text><text id="search" x="1090" y="24.00">Search</text><text id="matched" x="1090" y="549.00"> </text><svg id="frames" x="10" width="1180"><g><title>async-redis`&lt;core::future::from_generator::GenFuture&lt;T&gt; as core::future::future::Future&gt;::poll (30 samples, 0.01%)</title><rect x="0.0030%" y="325" width="0.0101%" height="15" fill="rgb(227,0,7)"/><text x="0.2530%" y="335.50"></text></g><g><title>async-redis`&lt;core::future::from_generator::GenFuture&lt;T&gt; as core::future::future::Future&gt;::poll (30 samples, 0.01%)</title><rect x="0.0030%" y="309" width="0.0101%" height="15" fill="rgb(217,0,24)"/><text x="0.2530%" y="319.50"></text></g><g><title>async-redis`&lt;tokio::future::poll_fn::PollFn&lt;F&gt; as core::future::future::Future&gt;::poll (30 samples, 0.01%)</title><rect x="0.0030%" y="293" width="0.0101%" height="15" fill="rgb(221,193,54)"/><text x="0.2530%" y="303.50"></text></g><g><title>async-redis`&lt;core::future::from_generator::GenFuture&lt;T&gt; as core::future::future::Future&gt;::poll (30 samples, 0.01%)</title><rect x="0.0030%" y="277" width="0.0101%" height="15" fill="rgb(248,212,6)"/><text x="0.2530%" y="287.50"></text></g><g><title>async-redis`0x1 (40 samples, 0.01%)</title><rect x="0.0000%" y="501" width="0.0134%" height="15" fill="rgb(208,68,35)"/><text x="0.2500%" y="511.50"></text></g><g><title>libdyld.dylib`start (40 samples, 0.01%)</title><rect x="0.0000%" y="485" width="0.0134%" height="15" fill="rgb(232,128,0)"/><text x="0.2500%" y="495.50"></text></g><g><title>async-redis`main (40 samples, 0.01%)</title><rect x="0.0000%" y="469" width="0.0134%" height="15" fill="rgb(207,160,47)"/><text x="0.2500%" y="479.50"></text></g><g><title>async-redis`std::rt::lang_start_internal (40 samples, 0.01%)</title><rect x="0.0000%" y="453" width="0.0134%" height="15" fill="rgb(228,23,34)"/><text x="0.2500%" y="463.50"></text></g><g><title>async-redis`std::rt::lang_start::_{{closure}} (40 samples, 0.01%)</title><rect x="0.0000%" y="437" width="0.0134%" height="15" fill="rgb(218,30,26)"/><text x="0.2500%" y="447.50"></text></g><g><title>async-redis`std::sys_common::backtrace::__rust_begin_short_backtrace (40 samples, 0.01%)</title><rect x="0.0000%" y="421" width="0.0134%" height="15" fill="rgb(220,122,19)"/><text x="0.2500%" y="431.50"></text></g><g><title>async-redis`async_redis::main (40 samples, 0.01%)</title><rect x="0.0000%" y="405" width="0.0134%" height="15" fill="rgb(250,228,42)"/><text x="0.2500%" y="415.50"></text></g><g><title>async-redis`tokio::runtime::Runtime::block_on (40 samples, 0.01%)</title><rect x="0.0000%" y="389" width="0.0134%" height="15" fill="rgb(240,193,28)"/><text x="0.2500%" y="399.50"></text></g><g><title>async-redis`tokio::runtime::thread_pool::ThreadPool::block_on (40 samples, 0.01%)</title><rect x="0.0000%" y="373" width="0.0134%" height="15" fill="rgb(216,20,37)"/><text x="0.2500%" y="383.50"></text></g><g><title>async-redis`tokio::park::thread::CachedParkThread::block_on (40 samples, 0.01%)</title><rect x="0.0000%" y="357" width="0.0134%" height="15" fill="rgb(206,188,39)"/><text x="0.2500%" y="367.50"></text></g><g><title>async-redis`std::thread::local::LocalKey&lt;T&gt;::with (31 samples, 0.01%)</title><rect x="0.0030%" y="341" width="0.0104%" height="15" fill="rgb(217,207,13)"/><text x="0.2530%" y="351.50"></text></g><g><title>libsystem_kernel.dylib`__psynch_cvwait (3,008 samples, 1.01%)</title><rect x="0.0134%" y="501" width="1.0098%" height="15" fill="rgb(231,73,38)"/><text x="0.2634%" y="511.50"></text></g><g><title>async-redis`tokio::runtime::queue::Local&lt;T&gt;::pop (76 samples, 0.03%)</title><rect x="1.1042%" y="309" width="0.0255%" height="15" fill="rgb(225,20,46)"/><text x="1.3542%" y="319.50"></text></g><g><title>async-redis`tokio::runtime::queue::Steal&lt;T&gt;::steal_into (73 samples, 0.02%)</title><rect x="1.1297%" y="309" width="0.0245%" height="15" fill="rgb(210,31,41)"/><text x="1.3797%" y="319.50"></text></g><g><title>libsystem_kernel.dylib`__psynch_cvwait (627 samples, 0.21%)</title><rect x="1.3422%" y="261" width="0.2105%" height="15" fill="rgb(221,200,47)"/><text x="1.5922%" y="271.50"></text></g><g><title>libsystem_pthread.dylib`_pthread_mutex_firstfit_lock_slow (33 samples, 0.01%)</title><rect x="1.5728%" y="245" width="0.0111%" height="15" fill="rgb(226,26,5)"/><text x="1.8228%" y="255.50"></text></g><g><title>libsystem_pthread.dylib`_pthread_cond_wait (113 samples, 0.04%)</title><rect x="1.5527%" y="261" width="0.0379%" height="15" fill="rgb(249,33,26)"/><text x="1.8027%" y="271.50"></text></g><g><title>async-redis`parking_lot::condvar::Condvar::wait_until_internal (823 samples, 0.28%)</title><rect x="1.3187%" y="277" width="0.2763%" height="15" fill="rgb(235,183,28)"/><text x="1.5687%" y="287.50"></text></g><g><title>async-redis`core::ptr::drop_in_place (36 samples, 0.01%)</title><rect x="1.6953%" y="213" width="0.0121%" height="15" fill="rgb(221,5,38)"/><text x="1.9453%" y="223.50"></text></g><g><title>async-redis`tokio::runtime::task::state::State::transition_to_notified (41 samples, 0.01%)</title><rect x="1.7125%" y="197" width="0.0138%" height="15" fill="rgb(247,18,42)"/><text x="1.9625%" y="207.50"></text></g><g><title>async-redis`tokio::runtime::task::waker::wake_by_val (80 samples, 0.03%)</title><rect x="1.7101%" y="213" width="0.0269%" height="15" fill="rgb(241,131,45)"/><text x="1.9601%" y="223.50"></text></g><g><title>async-redis`tokio::runtime::thread_pool::worker::_&lt;impl tokio::runtime::task::Schedule for alloc::sync::Arc&lt;tokio::runtime::thread_pool::worker::Worker&gt;&gt;::schedule (32 samples, 0.01%)</title><rect x="1.7262%" y="197" width="0.0107%" height="15" fill="rgb(249,31,29)"/><text x="1.9762%" y="207.50"></text></g><g><title>async-redis`tokio::io::driver::scheduled_io::ScheduledIo::wake0 (168 samples, 0.06%)</title><rect x="1.6809%" y="229" width="0.0564%" height="15" fill="rgb(225,111,53)"/><text x="1.9309%" y="239.50"></text></g><g><title>async-redis`tokio::io::driver::Driver::turn (1,602 samples, 0.54%)</title><rect x="1.6208%" y="245" width="0.5378%" height="15" fill="rgb(238,160,17)"/><text x="1.8708%" y="255.50"></text></g><g><title>libsystem_kernel.dylib`kevent (1,249 samples, 0.42%)</title><rect x="1.7393%" y="229" width="0.4193%" height="15" fill="rgb(214,148,48)"/><text x="1.9893%" y="239.50"></text></g><g><title>async-redis`tokio::signal::unix::driver::Driver::process (55 samples, 0.02%)</title><rect x="2.1610%" y="245" width="0.0185%" height="15" fill="rgb(232,36,49)"/><text x="2.4110%" y="255.50"></text></g><g><title>async-redis`tokio::io::driver::registration::Registration::poll_ready (46 samples, 0.02%)</title><rect x="2.1640%" y="229" width="0.0154%" height="15" fill="rgb(209,103,24)"/><text x="2.4140%" y="239.50"></text></g><g><title>async-redis`&lt;tokio::process::imp::driver::Driver as tokio::park::Park&gt;::park (1,708 samples, 0.57%)</title><rect x="1.6084%" y="261" width="0.5734%" height="15" fill="rgb(229,88,8)"/><text x="1.8584%" y="271.50"></text></g><g><title>async-redis`tokio::time::driver::_&lt;impl tokio::time::driver::handle::Handle&gt;::process_at_time (87 samples, 0.03%)</title><rect x="2.1932%" y="261" width="0.0292%" height="15" fill="rgb(213,181,19)"/><text x="2.4432%" y="271.50"></text></g><g><title>async-redis`tokio::time::driver::Driver&lt;P&gt;::park_internal (1,900 samples, 0.64%)</title><rect x="1.5987%" y="277" width="0.6378%" height="15" fill="rgb(254,191,54)"/><text x="1.8487%" y="287.50"></text></g><g><title>libsystem_kernel.dylib`swtch_pri (1,623 samples, 0.54%)</title><rect x="2.2392%" y="277" width="0.5449%" height="15" fill="rgb(241,83,37)"/><text x="2.4892%" y="287.50"></text></g><g><title>libsystem_pthread.dylib`cthread_yield (54 samples, 0.02%)</title><rect x="2.7921%" y="277" width="0.0181%" height="15" fill="rgb(233,36,39)"/><text x="3.0421%" y="287.50"></text></g><g><title>async-redis`&lt;tokio::runtime::park::Parker as tokio::park::Park&gt;::park (4,595 samples, 1.54%)</title><rect x="1.2733%" y="293" width="1.5426%" height="15" fill="rgb(226,3,54)"/><text x="1.5233%" y="303.50"></text></g><g><title>async-redis`tokio::runtime::task::state::State::transition_to_notified (83 samples, 0.03%)</title><rect x="2.9338%" y="197" width="0.0279%" height="15" fill="rgb(245,192,40)"/><text x="3.1838%" y="207.50"></text></g><g><title>async-redis`tokio::io::driver::scheduled_io::ScheduledIo::wake0 (228 samples, 0.08%)</title><rect x="2.8932%" y="229" width="0.0765%" height="15" fill="rgb(238,167,29)"/><text x="3.1432%" y="239.50"></text></g><g><title>async-redis`tokio::runtime::task::waker::wake_by_val (127 samples, 0.04%)</title><rect x="2.9271%" y="213" width="0.0426%" height="15" fill="rgb(232,182,51)"/><text x="3.1771%" y="223.50"></text></g><g><title>async-redis`tokio::io::driver::Driver::turn (1,293 samples, 0.43%)</title><rect x="2.8247%" y="245" width="0.4341%" height="15" fill="rgb(231,60,39)"/><text x="3.0747%" y="255.50"></text></g><g><title>libsystem_kernel.dylib`kevent (858 samples, 0.29%)</title><rect x="2.9707%" y="229" width="0.2880%" height="15" fill="rgb(208,69,12)"/><text x="3.2207%" y="239.50"></text></g><g><title>async-redis`&lt;tokio::process::imp::driver::Driver as tokio::park::Park&gt;::park_timeout (1,322 samples, 0.44%)</title><rect x="2.8206%" y="261" width="0.4438%" height="15" fill="rgb(235,93,37)"/><text x="3.0706%" y="271.50"></text></g><g><title>async-redis`tokio::time::driver::Driver&lt;P&gt;::park_internal (1,347 samples, 0.45%)</title><rect x="2.8196%" y="277" width="0.4522%" height="15" fill="rgb(213,116,39)"/><text x="3.0696%" y="287.50"></text></g><g><title>async-redis`&lt;tokio::runtime::park::Parker as tokio::park::Park&gt;::park_timeout (1,359 samples, 0.46%)</title><rect x="2.8159%" y="293" width="0.4562%" height="15" fill="rgb(222,207,29)"/><text x="3.0659%" y="303.50"></text></g><g><title>async-redis`tokio::runtime::thread_pool::worker::Context::park_timeout (6,369 samples, 2.14%)</title><rect x="1.1542%" y="309" width="2.1381%" height="15" fill="rgb(206,96,30)"/><text x="1.4042%" y="319.50">a..</text></g><g><title>libsystem_kernel.dylib`__psynch_cvsignal (332 samples, 0.11%)</title><rect x="3.3239%" y="277" width="0.1115%" height="15" fill="rgb(218,138,4)"/><text x="3.5739%" y="287.50"></text></g><g><title>async-redis`parking_lot::condvar::Condvar::notify_one_slow (408 samples, 0.14%)</title><rect x="3.3158%" y="293" width="0.1370%" height="15" fill="rgb(250,191,14)"/><text x="3.5658%" y="303.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (47 samples, 0.02%)</title><rect x="3.7549%" y="181" width="0.0158%" height="15" fill="rgb(239,60,40)"/><text x="4.0049%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (45 samples, 0.02%)</title><rect x="3.7556%" y="165" width="0.0151%" height="15" fill="rgb(206,27,48)"/><text x="4.0056%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (62 samples, 0.02%)</title><rect x="3.7502%" y="197" width="0.0208%" height="15" fill="rgb(225,35,8)"/><text x="4.0002%" y="207.50"></text></g><g><title>async-redis`&lt;alloc::string::String as core::clone::Clone&gt;::clone (75 samples, 0.03%)</title><rect x="3.7485%" y="213" width="0.0252%" height="15" fill="rgb(250,213,24)"/><text x="3.9985%" y="223.50"></text></g><g><title>async-redis`&lt;alloc::vec::Vec&lt;T&gt; as core::ops::drop::Drop&gt;::drop (77 samples, 0.03%)</title><rect x="3.7737%" y="213" width="0.0258%" height="15" fill="rgb(247,123,22)"/><text x="4.0237%" y="223.50"></text></g><g><title>async-redis`&lt;bytes::bytes::Bytes as core::convert::From&lt;alloc::vec::Vec&lt;u8&gt;&gt;&gt;::from (46 samples, 0.02%)</title><rect x="4.2155%" y="165" width="0.0154%" height="15" fill="rgb(231,138,38)"/><text x="4.4655%" y="175.50"></text></g><g><title>async-redis`std::io::error::Error::kind (40 samples, 0.01%)</title><rect x="4.3820%" y="133" width="0.0134%" height="15" fill="rgb(231,145,46)"/><text x="4.6320%" y="143.50"></text></g><g><title>async-redis`std::sys::unix::decode_error_kind (37 samples, 0.01%)</title><rect x="4.3955%" y="133" width="0.0124%" height="15" fill="rgb(251,118,11)"/><text x="4.6455%" y="143.50"></text></g><g><title>async-redis`&lt;&amp;std::net::tcp::TcpStream as std::io::Read&gt;::read (306 samples, 0.10%)</title><rect x="4.5096%" y="101" width="0.1027%" height="15" fill="rgb(217,147,25)"/><text x="4.7596%" y="111.50"></text></g><g><title>libsystem_pthread.dylib`_pthread_exit_if_canceled (41 samples, 0.01%)</title><rect x="4.5986%" y="85" width="0.0138%" height="15" fill="rgb(247,81,37)"/><text x="4.8486%" y="95.50"></text></g><g><title>libsystem_c.dylib`recv (48 samples, 0.02%)</title><rect x="4.6271%" y="101" width="0.0161%" height="15" fill="rgb(209,12,38)"/><text x="4.8771%" y="111.50"></text></g><g><title>libsystem_kernel.dylib`__recvfrom (41,703 samples, 14.00%)</title><rect x="4.6479%" y="101" width="14.0001%" height="15" fill="rgb(227,1,9)"/><text x="4.8979%" y="111.50">libsystem_kernel.dyli..</text></g><g><title>async-redis`&lt;&amp;mio::net::tcp::stream::TcpStream as std::io::Read&gt;::read (42,271 samples, 14.19%)</title><rect x="4.4754%" y="117" width="14.1908%" height="15" fill="rgb(248,47,43)"/><text x="4.7254%" y="127.50">async-redis`&lt;&amp;mio::net..</text></g><g><title>libsystem_kernel.dylib`cerror (54 samples, 0.02%)</title><rect x="18.6480%" y="101" width="0.0181%" height="15" fill="rgb(221,10,30)"/><text x="18.8980%" y="111.50"></text></g><g><title>async-redis`tokio::coop::CURRENT::__getit (64 samples, 0.02%)</title><rect x="18.7333%" y="101" width="0.0215%" height="15" fill="rgb(210,229,1)"/><text x="18.9833%" y="111.50"></text></g><g><title>async-redis`tokio::io::driver::scheduled_io::ScheduledIo::poll_readiness (247 samples, 0.08%)</title><rect x="18.7548%" y="101" width="0.0829%" height="15" fill="rgb(222,148,37)"/><text x="19.0048%" y="111.50"></text></g><g><title>async-redis`tokio::io::driver::registration::Registration::poll_ready (554 samples, 0.19%)</title><rect x="18.6833%" y="117" width="0.1860%" height="15" fill="rgb(234,67,33)"/><text x="18.9333%" y="127.50"></text></g><g><title>libdyld.dylib`tlv_get_addr (79 samples, 0.03%)</title><rect x="18.8427%" y="101" width="0.0265%" height="15" fill="rgb(247,98,35)"/><text x="19.0927%" y="111.50"></text></g><g><title>async-redis`tokio::io::driver::registration::Registration::poll_read_io (43,087 samples, 14.46%)</title><rect x="4.4079%" y="133" width="14.4647%" height="15" fill="rgb(247,138,52)"/><text x="4.6579%" y="143.50">async-redis`tokio::io:..</text></g><g><title>async-redis`&lt;tokio::net::tcp::stream::TcpStream as tokio::io::async_read::AsyncRead&gt;::poll_read (43,343 samples, 14.55%)</title><rect x="4.3377%" y="149" width="14.5507%" height="15" fill="rgb(213,79,30)"/><text x="4.5877%" y="159.50">async-redis`&lt;tokio::ne..</text></g><g><title>async-redis`tokio::io::driver::registration::Registration::poll_ready (47 samples, 0.02%)</title><rect x="18.8726%" y="133" width="0.0158%" height="15" fill="rgb(246,177,23)"/><text x="19.1226%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`szone_realloc (82 samples, 0.03%)</title><rect x="18.9045%" y="85" width="0.0275%" height="15" fill="rgb(230,62,27)"/><text x="19.1545%" y="95.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove$VARIANT$Haswell (71 samples, 0.02%)</title><rect x="18.9082%" y="69" width="0.0238%" height="15" fill="rgb(216,154,8)"/><text x="19.1582%" y="79.50"></text></g><g><title>async-redis`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve (86 samples, 0.03%)</title><rect x="18.9035%" y="133" width="0.0289%" height="15" fill="rgb(244,35,45)"/><text x="19.1535%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`realloc (83 samples, 0.03%)</title><rect x="18.9045%" y="117" width="0.0279%" height="15" fill="rgb(251,115,12)"/><text x="19.1545%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`malloc_zone_realloc (83 samples, 0.03%)</title><rect x="18.9045%" y="101" width="0.0279%" height="15" fill="rgb(240,54,50)"/><text x="19.1545%" y="111.50"></text></g><g><title>async-redis`bytes::bytes_mut::BytesMut::reserve_inner (3,201 samples, 1.07%)</title><rect x="18.8904%" y="149" width="1.0746%" height="15" fill="rgb(233,84,52)"/><text x="19.1404%" y="159.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove$VARIANT$Haswell (3,075 samples, 1.03%)</title><rect x="18.9327%" y="133" width="1.0323%" height="15" fill="rgb(207,117,47)"/><text x="19.1827%" y="143.50"></text></g><g><title>async-redis`&lt;tokio::io::util::read_buf::ReadBuf&lt;R,B&gt; as core::future::future::Future&gt;::poll (46,934 samples, 15.76%)</title><rect x="4.2310%" y="165" width="15.7562%" height="15" fill="rgb(249,43,39)"/><text x="4.4810%" y="175.50">async-redis`&lt;tokio::io::..</text></g><g><title>libsystem_platform.dylib`_platform_memmove$VARIANT$Haswell (39 samples, 0.01%)</title><rect x="19.9741%" y="149" width="0.0131%" height="15" fill="rgb(209,38,44)"/><text x="20.2241%" y="159.50"></text></g><g><title>async-redis`&lt;tokio::net::tcp::stream::TcpStream as tokio::io::async_read::AsyncRead&gt;::poll_read (38 samples, 0.01%)</title><rect x="19.9872%" y="165" width="0.0128%" height="15" fill="rgb(236,212,23)"/><text x="20.2372%" y="175.50"></text></g><g><title>async-redis`&lt;alloc::vec::Vec&lt;T&gt; as core::ops::drop::Drop&gt;::drop (68 samples, 0.02%)</title><rect x="20.1470%" y="149" width="0.0228%" height="15" fill="rgb(242,79,21)"/><text x="20.3970%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`set_tiny_meta_header_in_use (32 samples, 0.01%)</title><rect x="20.2349%" y="85" width="0.0107%" height="15" fill="rgb(211,96,35)"/><text x="20.4849%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (216 samples, 0.07%)</title><rect x="20.2061%" y="117" width="0.0725%" height="15" fill="rgb(253,215,40)"/><text x="20.4561%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (202 samples, 0.07%)</title><rect x="20.2108%" y="101" width="0.0678%" height="15" fill="rgb(211,81,21)"/><text x="20.4608%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_from_free_list (96 samples, 0.03%)</title><rect x="20.2463%" y="85" width="0.0322%" height="15" fill="rgb(208,190,38)"/><text x="20.4963%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (236 samples, 0.08%)</title><rect x="20.1997%" y="133" width="0.0792%" height="15" fill="rgb(235,213,38)"/><text x="20.4497%" y="143.50"></text></g><g><title>async-redis`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve (283 samples, 0.10%)</title><rect x="20.1852%" y="149" width="0.0950%" height="15" fill="rgb(237,122,38)"/><text x="20.4352%" y="159.50"></text></g><g><title>async-redis`bytes::bytes::Bytes::slice (211 samples, 0.07%)</title><rect x="57.8717%" y="117" width="0.0708%" height="15" fill="rgb(244,218,35)"/><text x="58.1217%" y="127.50"></text></g><g><title>async-redis`bytes::bytes::promotable_even_clone (141 samples, 0.05%)</title><rect x="57.8952%" y="101" width="0.0473%" height="15" fill="rgb(240,68,47)"/><text x="58.1452%" y="111.50"></text></g><g><title>async-redis`async_redis::protocol::get_line (112,009 samples, 37.60%)</title><rect x="20.3635%" y="133" width="37.6026%" height="15" fill="rgb(210,16,53)"/><text x="20.6135%" y="143.50">async-redis`async_redis::protocol::get_line</text></g><g><title>async-redis`bytes::bytes::promotable_even_clone (70 samples, 0.02%)</title><rect x="57.9426%" y="117" width="0.0235%" height="15" fill="rgb(235,124,12)"/><text x="58.1926%" y="127.50"></text></g><g><title>async-redis`core::num::_&lt;impl core::str::traits::FromStr for i64&gt;::from_str (62 samples, 0.02%)</title><rect x="57.9889%" y="117" width="0.0208%" height="15" fill="rgb(224,169,11)"/><text x="58.2389%" y="127.50"></text></g><g><title>async-redis`core::str::converts::from_utf8 (53 samples, 0.02%)</title><rect x="58.0097%" y="117" width="0.0178%" height="15" fill="rgb(250,166,2)"/><text x="58.2597%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (208 samples, 0.07%)</title><rect x="58.0433%" y="101" width="0.0698%" height="15" fill="rgb(242,216,29)"/><text x="58.2933%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (194 samples, 0.07%)</title><rect x="58.0480%" y="85" width="0.0651%" height="15" fill="rgb(230,116,27)"/><text x="58.2980%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (256 samples, 0.09%)</title><rect x="58.0275%" y="117" width="0.0859%" height="15" fill="rgb(228,99,48)"/><text x="58.2775%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`szone_size (86 samples, 0.03%)</title><rect x="58.1356%" y="101" width="0.0289%" height="15" fill="rgb(253,11,6)"/><text x="58.3856%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`tiny_size (74 samples, 0.02%)</title><rect x="58.1396%" y="85" width="0.0248%" height="15" fill="rgb(247,143,39)"/><text x="58.3896%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`free (140 samples, 0.05%)</title><rect x="58.1185%" y="117" width="0.0470%" height="15" fill="rgb(236,97,10)"/><text x="58.3685%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`free_tiny (101 samples, 0.03%)</title><rect x="58.1655%" y="117" width="0.0339%" height="15" fill="rgb(233,208,19)"/><text x="58.4155%" y="127.50"></text></g><g><title>async-redis`async_redis::protocol::get_number (744 samples, 0.25%)</title><rect x="57.9661%" y="133" width="0.2498%" height="15" fill="rgb(216,164,2)"/><text x="58.2161%" y="143.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove$VARIANT$Haswell (30 samples, 0.01%)</title><rect x="58.2058%" y="117" width="0.0101%" height="15" fill="rgb(220,129,5)"/><text x="58.4558%" y="127.50"></text></g><g><title>async-redis`bytes::bytes::Bytes::slice (55 samples, 0.02%)</title><rect x="58.2158%" y="133" width="0.0185%" height="15" fill="rgb(242,17,10)"/><text x="58.4658%" y="143.50"></text></g><g><title>async-redis`bytes::bytes::Bytes::split_to (89 samples, 0.03%)</title><rect x="58.2343%" y="133" width="0.0299%" height="15" fill="rgb(242,107,0)"/><text x="58.4843%" y="143.50"></text></g><g><title>async-redis`bytes::bytes::promotable_even_clone (70 samples, 0.02%)</title><rect x="58.2407%" y="117" width="0.0235%" height="15" fill="rgb(251,28,31)"/><text x="58.4907%" y="127.50"></text></g><g><title>async-redis`bytes::bytes::shared_drop (158 samples, 0.05%)</title><rect x="58.2675%" y="133" width="0.0530%" height="15" fill="rgb(233,223,10)"/><text x="58.5175%" y="143.50"></text></g><g><title>async-redis`async_redis::protocol::Decode (113,392 samples, 38.07%)</title><rect x="20.2803%" y="149" width="38.0668%" height="15" fill="rgb(215,21,27)"/><text x="20.5303%" y="159.50">async-redis`async_redis::protocol::Decode</text></g><g><title>async-redis`bytes::bytes::Bytes::slice (32 samples, 0.01%)</title><rect x="58.3612%" y="133" width="0.0107%" height="15" fill="rgb(232,23,21)"/><text x="58.6112%" y="143.50"></text></g><g><title>async-redis`async_redis::protocol::get_line (81 samples, 0.03%)</title><rect x="58.3471%" y="149" width="0.0272%" height="15" fill="rgb(244,5,23)"/><text x="58.5971%" y="159.50"></text></g><g><title>async-redis`core::num::_&lt;impl core::str::traits::FromStr for i64&gt;::from_str (36 samples, 0.01%)</title><rect x="58.3961%" y="133" width="0.0121%" height="15" fill="rgb(226,81,46)"/><text x="58.6461%" y="143.50"></text></g><g><title>async-redis`core::str::converts::from_utf8 (38 samples, 0.01%)</title><rect x="58.4082%" y="133" width="0.0128%" height="15" fill="rgb(247,70,30)"/><text x="58.6582%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (233 samples, 0.08%)</title><rect x="58.4210%" y="133" width="0.0782%" height="15" fill="rgb(212,68,19)"/><text x="58.6710%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (214 samples, 0.07%)</title><rect x="58.4273%" y="117" width="0.0718%" height="15" fill="rgb(240,187,13)"/><text x="58.6773%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (202 samples, 0.07%)</title><rect x="58.4314%" y="101" width="0.0678%" height="15" fill="rgb(223,113,26)"/><text x="58.6814%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_from_free_list (116 samples, 0.04%)</title><rect x="58.4602%" y="85" width="0.0389%" height="15" fill="rgb(206,192,2)"/><text x="58.7102%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`szone_size (70 samples, 0.02%)</title><rect x="58.5210%" y="117" width="0.0235%" height="15" fill="rgb(241,108,4)"/><text x="58.7710%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`tiny_size (65 samples, 0.02%)</title><rect x="58.5227%" y="101" width="0.0218%" height="15" fill="rgb(247,173,49)"/><text x="58.7727%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`free (130 samples, 0.04%)</title><rect x="58.5042%" y="133" width="0.0436%" height="15" fill="rgb(224,114,35)"/><text x="58.7542%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_add_ptr (30 samples, 0.01%)</title><rect x="58.5821%" y="101" width="0.0101%" height="15" fill="rgb(245,159,27)"/><text x="58.8321%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`free_tiny (134 samples, 0.04%)</title><rect x="58.5479%" y="133" width="0.0450%" height="15" fill="rgb(245,172,44)"/><text x="58.7979%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (72 samples, 0.02%)</title><rect x="58.5687%" y="117" width="0.0242%" height="15" fill="rgb(236,23,11)"/><text x="58.8187%" y="127.50"></text></g><g><title>async-redis`async_redis::protocol::get_number (692 samples, 0.23%)</title><rect x="58.3743%" y="149" width="0.2323%" height="15" fill="rgb(205,117,38)"/><text x="58.6243%" y="159.50"></text></g><g><title>async-redis`bytes::bytes::Bytes::slice (30 samples, 0.01%)</title><rect x="58.6066%" y="149" width="0.0101%" height="15" fill="rgb(237,72,25)"/><text x="58.8566%" y="159.50"></text></g><g><title>async-redis`__rdl_alloc (30 samples, 0.01%)</title><rect x="58.6321%" y="117" width="0.0101%" height="15" fill="rgb(244,70,9)"/><text x="58.8821%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`set_tiny_meta_header_in_use (39 samples, 0.01%)</title><rect x="58.7587%" y="53" width="0.0131%" height="15" fill="rgb(217,125,39)"/><text x="59.0087%" y="63.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (405 samples, 0.14%)</title><rect x="58.7006%" y="85" width="0.1360%" height="15" fill="rgb(235,36,10)"/><text x="58.9506%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (383 samples, 0.13%)</title><rect x="58.7080%" y="69" width="0.1286%" height="15" fill="rgb(251,123,47)"/><text x="58.9580%" y="79.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_from_free_list (188 samples, 0.06%)</title><rect x="58.7734%" y="53" width="0.0631%" height="15" fill="rgb(221,13,13)"/><text x="59.0234%" y="63.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_add_ptr (37 samples, 0.01%)</title><rect x="58.8241%" y="37" width="0.0124%" height="15" fill="rgb(238,131,9)"/><text x="59.0741%" y="47.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (516 samples, 0.17%)</title><rect x="58.6674%" y="101" width="0.1732%" height="15" fill="rgb(211,50,8)"/><text x="58.9174%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`default_zone_malloc (62 samples, 0.02%)</title><rect x="58.8406%" y="101" width="0.0208%" height="15" fill="rgb(245,182,24)"/><text x="59.0906%" y="111.50"></text></g><g><title>async-redis`bytes::bytes::shallow_clone_vec (650 samples, 0.22%)</title><rect x="58.6462%" y="117" width="0.2182%" height="15" fill="rgb(242,14,37)"/><text x="58.8962%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (38 samples, 0.01%)</title><rect x="58.8644%" y="117" width="0.0128%" height="15" fill="rgb(246,228,12)"/><text x="59.1144%" y="127.50"></text></g><g><title>async-redis`bytes::bytes::promotable_even_clone (803 samples, 0.27%)</title><rect x="58.6207%" y="133" width="0.2696%" height="15" fill="rgb(213,55,15)"/><text x="58.8707%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`malloc (39 samples, 0.01%)</title><rect x="58.8772%" y="117" width="0.0131%" height="15" fill="rgb(209,9,3)"/><text x="59.1272%" y="127.50"></text></g><g><title>async-redis`bytes::bytes::Bytes::split_to (844 samples, 0.28%)</title><rect x="58.6167%" y="149" width="0.2833%" height="15" fill="rgb(230,59,30)"/><text x="58.8667%" y="159.50"></text></g><g><title>async-redis`bytes::bytes::shared_drop (113 samples, 0.04%)</title><rect x="58.9067%" y="149" width="0.0379%" height="15" fill="rgb(209,121,21)"/><text x="59.1567%" y="159.50"></text></g><g><title>async-redis`core::num::_&lt;impl core::str::traits::FromStr for i64&gt;::from_str (54 samples, 0.02%)</title><rect x="58.9447%" y="149" width="0.0181%" height="15" fill="rgb(220,109,13)"/><text x="59.1947%" y="159.50"></text></g><g><title>async-redis`core::str::converts::from_utf8 (37 samples, 0.01%)</title><rect x="58.9628%" y="149" width="0.0124%" height="15" fill="rgb(232,18,1)"/><text x="59.2128%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`szone_size (56 samples, 0.02%)</title><rect x="59.0068%" y="133" width="0.0188%" height="15" fill="rgb(215,41,42)"/><text x="59.2568%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`tiny_size (55 samples, 0.02%)</title><rect x="59.0071%" y="117" width="0.0185%" height="15" fill="rgb(224,123,36)"/><text x="59.2571%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`free (126 samples, 0.04%)</title><rect x="58.9836%" y="149" width="0.0423%" height="15" fill="rgb(240,125,3)"/><text x="59.2336%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_add_ptr (58 samples, 0.02%)</title><rect x="59.0659%" y="117" width="0.0195%" height="15" fill="rgb(205,98,50)"/><text x="59.3159%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`free_tiny (197 samples, 0.07%)</title><rect x="59.0259%" y="149" width="0.0661%" height="15" fill="rgb(205,185,37)"/><text x="59.2759%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (131 samples, 0.04%)</title><rect x="59.0481%" y="133" width="0.0440%" height="15" fill="rgb(238,207,15)"/><text x="59.2981%" y="143.50"></text></g><g><title>async-redis`async_redis::protocol::Decode (116,426 samples, 39.09%)</title><rect x="20.0221%" y="165" width="39.0854%" height="15" fill="rgb(213,199,42)"/><text x="20.2721%" y="175.50">async-redis`async_redis::protocol::Decode</text></g><g><title>libsystem_malloc.dylib`small_size (128 samples, 0.04%)</title><rect x="59.1810%" y="133" width="0.0430%" height="15" fill="rgb(235,201,11)"/><text x="59.4310%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`szone_size (48 samples, 0.02%)</title><rect x="59.2240%" y="133" width="0.0161%" height="15" fill="rgb(207,46,11)"/><text x="59.4740%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`tiny_size (32 samples, 0.01%)</title><rect x="59.2293%" y="117" width="0.0107%" height="15" fill="rgb(241,35,35)"/><text x="59.4793%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`free (260 samples, 0.09%)</title><rect x="59.1538%" y="149" width="0.0873%" height="15" fill="rgb(243,32,47)"/><text x="59.4038%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`free_small (65 samples, 0.02%)</title><rect x="59.2418%" y="149" width="0.0218%" height="15" fill="rgb(247,202,23)"/><text x="59.4918%" y="159.50"></text></g><g><title>async-redis`bytes::bytes::promotable_even_drop (469 samples, 0.16%)</title><rect x="59.1212%" y="165" width="0.1574%" height="15" fill="rgb(219,102,11)"/><text x="59.3712%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`szone_size (42 samples, 0.01%)</title><rect x="59.2646%" y="149" width="0.0141%" height="15" fill="rgb(243,110,44)"/><text x="59.5146%" y="159.50"></text></g><g><title>libsystem_kernel.dylib`__ulock_wait (797 samples, 0.27%)</title><rect x="59.7826%" y="117" width="0.2676%" height="15" fill="rgb(222,74,54)"/><text x="60.0326%" y="127.50"></text></g><g><title>libsystem_kernel.dylib`__ulock_wake (204 samples, 0.07%)</title><rect x="60.0502%" y="117" width="0.0685%" height="15" fill="rgb(216,99,12)"/><text x="60.3002%" y="127.50"></text></g><g><title>libsystem_kernel.dylib`mach_vm_map (37 samples, 0.01%)</title><rect x="60.1186%" y="117" width="0.0124%" height="15" fill="rgb(226,22,26)"/><text x="60.3686%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`large_entries_grow_no_lock (98 samples, 0.03%)</title><rect x="60.1354%" y="117" width="0.0329%" height="15" fill="rgb(217,163,10)"/><text x="60.3854%" y="127.50"></text></g><g><title>libsystem_kernel.dylib`_kernelrpc_mach_vm_map_trap (5,904 samples, 1.98%)</title><rect x="60.1932%" y="101" width="1.9820%" height="15" fill="rgb(213,25,53)"/><text x="60.4432%" y="111.50">l..</text></g><g><title>libsystem_malloc.dylib`mvm_allocate_pages (6,051 samples, 2.03%)</title><rect x="60.1683%" y="117" width="2.0314%" height="15" fill="rgb(252,105,26)"/><text x="60.4183%" y="127.50">l..</text></g><g><title>libsystem_kernel.dylib`mach_vm_map (73 samples, 0.02%)</title><rect x="62.1752%" y="101" width="0.0245%" height="15" fill="rgb(220,39,43)"/><text x="62.4252%" y="111.50"></text></g><g><title>libsystem_platform.dylib`_os_unfair_lock_lock_slow (45 samples, 0.02%)</title><rect x="62.2027%" y="117" width="0.0151%" height="15" fill="rgb(229,68,48)"/><text x="62.4527%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`large_malloc (8,459 samples, 2.84%)</title><rect x="59.3787%" y="133" width="2.8398%" height="15" fill="rgb(252,8,32)"/><text x="59.6287%" y="143.50">li..</text></g><g><title>libsystem_malloc.dylib`small_malloc_should_clear (162 samples, 0.05%)</title><rect x="62.2245%" y="133" width="0.0544%" height="15" fill="rgb(223,20,43)"/><text x="62.4745%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (8,939 samples, 3.00%)</title><rect x="59.2878%" y="165" width="3.0009%" height="15" fill="rgb(229,81,49)"/><text x="59.5378%" y="175.50">lib..</text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (8,743 samples, 2.94%)</title><rect x="59.3536%" y="149" width="2.9351%" height="15" fill="rgb(236,28,36)"/><text x="59.6036%" y="159.50">li..</text></g><g><title>libsystem_malloc.dylib`default_zone_malloc (34 samples, 0.01%)</title><rect x="62.2897%" y="165" width="0.0114%" height="15" fill="rgb(249,185,26)"/><text x="62.5397%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`szone_size (75 samples, 0.03%)</title><rect x="62.3283%" y="149" width="0.0252%" height="15" fill="rgb(249,174,33)"/><text x="62.5783%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_size (74 samples, 0.02%)</title><rect x="62.3286%" y="133" width="0.0248%" height="15" fill="rgb(233,201,37)"/><text x="62.5786%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`free (158 samples, 0.05%)</title><rect x="62.3011%" y="165" width="0.0530%" height="15" fill="rgb(221,78,26)"/><text x="62.5511%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_add_ptr (70 samples, 0.02%)</title><rect x="62.3951%" y="133" width="0.0235%" height="15" fill="rgb(250,127,30)"/><text x="62.6451%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`free_tiny (210 samples, 0.07%)</title><rect x="62.3548%" y="165" width="0.0705%" height="15" fill="rgb(230,49,44)"/><text x="62.6048%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (154 samples, 0.05%)</title><rect x="62.3736%" y="149" width="0.0517%" height="15" fill="rgb(229,67,23)"/><text x="62.6236%" y="159.50"></text></g><g><title>async-redis`&lt;core::future::from_generator::GenFuture&lt;T&gt; as core::future::future::Future&gt;::poll (264,223 samples, 88.70%)</title><rect x="3.9392%" y="181" width="88.7023%" height="15" fill="rgb(249,83,47)"/><text x="4.1892%" y="191.50">async-redis`&lt;core::future::from_generator::GenFuture&lt;T&gt; as core::future::future::Future&gt;::poll</text></g><g><title>libsystem_platform.dylib`_platform_memmove$VARIANT$Haswell (89,982 samples, 30.21%)</title><rect x="62.4337%" y="165" width="30.2079%" height="15" fill="rgb(215,43,3)"/><text x="62.6837%" y="175.50">libsystem_platform.dylib`_platform_memmove$VARIAN..</text></g><g><title>async-redis`&lt;tokio::io::util::read_buf::ReadBuf&lt;R,B&gt; as core::future::future::Future&gt;::poll (36 samples, 0.01%)</title><rect x="92.6416%" y="181" width="0.0121%" height="15" fill="rgb(238,154,13)"/><text x="92.8916%" y="191.50"></text></g><g><title>async-redis`tokio::sync::broadcast::Receiver&lt;T&gt;::recv_ref (398 samples, 0.13%)</title><rect x="92.6584%" y="165" width="0.1336%" height="15" fill="rgb(219,56,2)"/><text x="92.9084%" y="175.50"></text></g><g><title>async-redis`&lt;tokio::sync::broadcast::Recv&lt;R,T&gt; as core::future::future::Future&gt;::poll (423 samples, 0.14%)</title><rect x="92.6537%" y="181" width="0.1420%" height="15" fill="rgb(233,0,4)"/><text x="92.9037%" y="191.50"></text></g><g><title>async-redis`__rdl_alloc (32 samples, 0.01%)</title><rect x="92.8067%" y="181" width="0.0107%" height="15" fill="rgb(235,30,7)"/><text x="93.0567%" y="191.50"></text></g><g><title>async-redis`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve (32 samples, 0.01%)</title><rect x="92.8222%" y="181" width="0.0107%" height="15" fill="rgb(250,79,13)"/><text x="93.0722%" y="191.50"></text></g><g><title>async-redis`async_redis::protocol::Decode (42 samples, 0.01%)</title><rect x="92.8329%" y="181" width="0.0141%" height="15" fill="rgb(211,146,34)"/><text x="93.0829%" y="191.50"></text></g><g><title>async-redis`bytes::bytes::promotable_even_drop (31 samples, 0.01%)</title><rect x="92.8470%" y="181" width="0.0104%" height="15" fill="rgb(228,22,38)"/><text x="93.0970%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (38 samples, 0.01%)</title><rect x="92.8779%" y="181" width="0.0128%" height="15" fill="rgb(235,168,5)"/><text x="93.1279%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`malloc (82 samples, 0.03%)</title><rect x="92.8937%" y="181" width="0.0275%" height="15" fill="rgb(221,155,16)"/><text x="93.1437%" y="191.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove$VARIANT$Haswell (110 samples, 0.04%)</title><rect x="92.9222%" y="181" width="0.0369%" height="15" fill="rgb(215,215,53)"/><text x="93.1722%" y="191.50"></text></g><g><title>async-redis`&lt;core::future::from_generator::GenFuture&lt;T&gt; as core::future::future::Future&gt;::poll (265,382 samples, 89.09%)</title><rect x="3.8681%" y="197" width="89.0914%" height="15" fill="rgb(223,4,10)"/><text x="4.1181%" y="207.50">async-redis`&lt;core::future::from_generator::GenFuture&lt;T&gt; as core::future::future::Future&gt;::poll</text></g><g><title>async-redis`&lt;tracing::span::Span as core::ops::drop::Drop&gt;::drop (30 samples, 0.01%)</title><rect x="92.9649%" y="197" width="0.0101%" height="15" fill="rgb(234,103,6)"/><text x="93.2149%" y="207.50"></text></g><g><title>async-redis`tokio::util::rand::thread_rng_n (74 samples, 0.02%)</title><rect x="92.9749%" y="197" width="0.0248%" height="15" fill="rgb(227,97,0)"/><text x="93.2249%" y="207.50"></text></g><g><title>async-redis`&lt;tokio::future::poll_fn::PollFn&lt;F&gt; as core::future::future::Future&gt;::poll (265,742 samples, 89.21%)</title><rect x="3.8123%" y="213" width="89.2123%" height="15" fill="rgb(234,150,53)"/><text x="4.0623%" y="223.50">async-redis`&lt;tokio::future::poll_fn::PollFn&lt;F&gt; as core::future::future::Future&gt;::poll</text></g><g><title>libdyld.dylib`tlv_get_addr (59 samples, 0.02%)</title><rect x="93.0048%" y="197" width="0.0198%" height="15" fill="rgb(228,201,54)"/><text x="93.2548%" y="207.50"></text></g><g><title>async-redis`&lt;tokio::io::util::write_all::WriteAll&lt;W&gt; as core::future::future::Future&gt;::poll (127 samples, 0.04%)</title><rect x="93.0246%" y="213" width="0.0426%" height="15" fill="rgb(222,22,37)"/><text x="93.2746%" y="223.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove$VARIANT$Haswell (98 samples, 0.03%)</title><rect x="93.0343%" y="197" width="0.0329%" height="15" fill="rgb(237,53,32)"/><text x="93.2843%" y="207.50"></text></g><g><title>async-redis`core::unicode::unicode_data::conversions::to_lower (182 samples, 0.06%)</title><rect x="93.1270%" y="181" width="0.0611%" height="15" fill="rgb(233,25,53)"/><text x="93.3770%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (77 samples, 0.03%)</title><rect x="93.1905%" y="165" width="0.0258%" height="15" fill="rgb(210,40,34)"/><text x="93.4405%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (74 samples, 0.02%)</title><rect x="93.1915%" y="149" width="0.0248%" height="15" fill="rgb(241,220,44)"/><text x="93.4415%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_from_free_list (48 samples, 0.02%)</title><rect x="93.2002%" y="133" width="0.0161%" height="15" fill="rgb(235,28,35)"/><text x="93.4502%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (86 samples, 0.03%)</title><rect x="93.1881%" y="181" width="0.0289%" height="15" fill="rgb(210,56,17)"/><text x="93.4381%" y="191.50"></text></g><g><title>async-redis`alloc::str::_&lt;impl str&gt;::to_lowercase (304 samples, 0.10%)</title><rect x="93.1169%" y="197" width="0.1021%" height="15" fill="rgb(224,130,29)"/><text x="93.3669%" y="207.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (274 samples, 0.09%)</title><rect x="93.2653%" y="165" width="0.0920%" height="15" fill="rgb(235,212,8)"/><text x="93.5153%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (253 samples, 0.08%)</title><rect x="93.2724%" y="149" width="0.0849%" height="15" fill="rgb(223,33,50)"/><text x="93.5224%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_from_free_list (119 samples, 0.04%)</title><rect x="93.3174%" y="133" width="0.0399%" height="15" fill="rgb(219,149,13)"/><text x="93.5674%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (346 samples, 0.12%)</title><rect x="93.2422%" y="181" width="0.1162%" height="15" fill="rgb(250,156,29)"/><text x="93.4922%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`default_zone_malloc (41 samples, 0.01%)</title><rect x="93.3583%" y="181" width="0.0138%" height="15" fill="rgb(216,193,19)"/><text x="93.6083%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`szone_size (52 samples, 0.02%)</title><rect x="93.3791%" y="165" width="0.0175%" height="15" fill="rgb(216,135,14)"/><text x="93.6291%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`tiny_size (48 samples, 0.02%)</title><rect x="93.3805%" y="149" width="0.0161%" height="15" fill="rgb(241,47,5)"/><text x="93.6305%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`free (77 samples, 0.03%)</title><rect x="93.3721%" y="181" width="0.0258%" height="15" fill="rgb(233,42,35)"/><text x="93.6221%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`free_tiny (119 samples, 0.04%)</title><rect x="93.3979%" y="181" width="0.0399%" height="15" fill="rgb(231,13,6)"/><text x="93.6479%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (77 samples, 0.03%)</title><rect x="93.4120%" y="165" width="0.0258%" height="15" fill="rgb(207,181,40)"/><text x="93.6620%" y="175.50"></text></g><g><title>async-redis`async_redis::cmd::Parser::next_string (699 samples, 0.23%)</title><rect x="93.2217%" y="197" width="0.2347%" height="15" fill="rgb(254,173,49)"/><text x="93.4717%" y="207.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove$VARIANT$Haswell (43 samples, 0.01%)</title><rect x="93.4419%" y="181" width="0.0144%" height="15" fill="rgb(221,1,38)"/><text x="93.6919%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (115 samples, 0.04%)</title><rect x="93.4892%" y="149" width="0.0386%" height="15" fill="rgb(206,124,46)"/><text x="93.7392%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (110 samples, 0.04%)</title><rect x="93.4909%" y="133" width="0.0369%" height="15" fill="rgb(249,21,11)"/><text x="93.7409%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_from_free_list (38 samples, 0.01%)</title><rect x="93.5151%" y="117" width="0.0128%" height="15" fill="rgb(222,201,40)"/><text x="93.7651%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (126 samples, 0.04%)</title><rect x="93.4859%" y="165" width="0.0423%" height="15" fill="rgb(235,61,29)"/><text x="93.7359%" y="175.50"></text></g><g><title>async-redis`async_redis::cmd::Parser::next_string (235 samples, 0.08%)</title><rect x="93.4728%" y="181" width="0.0789%" height="15" fill="rgb(219,207,3)"/><text x="93.7228%" y="191.50"></text></g><g><title>async-redis`async_redis::cmd::set::Set::new (312 samples, 0.10%)</title><rect x="93.4563%" y="197" width="0.1047%" height="15" fill="rgb(222,56,46)"/><text x="93.7063%" y="207.50"></text></g><g><title>async-redis`core::unicode::unicode_data::conversions::to_lower (33 samples, 0.01%)</title><rect x="93.5644%" y="197" width="0.0111%" height="15" fill="rgb(239,76,54)"/><text x="93.8144%" y="207.50"></text></g><g><title>libsystem_malloc.dylib`szone_size (31 samples, 0.01%)</title><rect x="93.5906%" y="181" width="0.0104%" height="15" fill="rgb(231,124,27)"/><text x="93.8406%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`tiny_size (30 samples, 0.01%)</title><rect x="93.5910%" y="165" width="0.0101%" height="15" fill="rgb(249,195,6)"/><text x="93.8410%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`free (64 samples, 0.02%)</title><rect x="93.5799%" y="197" width="0.0215%" height="15" fill="rgb(237,174,47)"/><text x="93.8299%" y="207.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_add_ptr (50 samples, 0.02%)</title><rect x="93.6369%" y="165" width="0.0168%" height="15" fill="rgb(206,201,31)"/><text x="93.8869%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`free_tiny (163 samples, 0.05%)</title><rect x="93.6014%" y="197" width="0.0547%" height="15" fill="rgb(231,57,52)"/><text x="93.8514%" y="207.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (115 samples, 0.04%)</title><rect x="93.6175%" y="181" width="0.0386%" height="15" fill="rgb(248,177,22)"/><text x="93.8675%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`malloc (38 samples, 0.01%)</title><rect x="93.6561%" y="197" width="0.0128%" height="15" fill="rgb(215,211,37)"/><text x="93.9061%" y="207.50"></text></g><g><title>async-redis`async_redis::cmd::Command::new (1,753 samples, 0.59%)</title><rect x="93.0904%" y="213" width="0.5885%" height="15" fill="rgb(241,128,51)"/><text x="93.3404%" y="223.50"></text></g><g><title>libsystem_kernel.dylib`madvise (116 samples, 0.04%)</title><rect x="93.7246%" y="181" width="0.0389%" height="15" fill="rgb(227,165,31)"/><text x="93.9746%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`large_entry_for_pointer_no_lock (95 samples, 0.03%)</title><rect x="93.7638%" y="165" width="0.0319%" height="15" fill="rgb(228,167,24)"/><text x="94.0138%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`free (125 samples, 0.04%)</title><rect x="93.7635%" y="181" width="0.0420%" height="15" fill="rgb(228,143,12)"/><text x="94.0135%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`mvm_deallocate_pages (62 samples, 0.02%)</title><rect x="93.8199%" y="165" width="0.0208%" height="15" fill="rgb(249,149,8)"/><text x="94.0699%" y="175.50"></text></g><g><title>libsystem_kernel.dylib`_kernelrpc_mach_vm_deallocate_trap (61 samples, 0.02%)</title><rect x="93.8202%" y="149" width="0.0205%" height="15" fill="rgb(243,35,44)"/><text x="94.0702%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`free_large (106 samples, 0.04%)</title><rect x="93.8055%" y="181" width="0.0356%" height="15" fill="rgb(246,89,9)"/><text x="94.0555%" y="191.50"></text></g><g><title>async-redis`bytes::bytes::shared_drop (404 samples, 0.14%)</title><rect x="93.7068%" y="197" width="0.1356%" height="15" fill="rgb(233,213,13)"/><text x="93.9568%" y="207.50"></text></g><g><title>async-redis`&lt;std::collections::hash::map::DefaultHasher as core::hash::Hasher&gt;::write (33 samples, 0.01%)</title><rect x="94.1170%" y="181" width="0.0111%" height="15" fill="rgb(233,141,41)"/><text x="94.3670%" y="191.50"></text></g><g><title>async-redis`dashmap::lock::compare_exchange (131 samples, 0.04%)</title><rect x="94.1281%" y="181" width="0.0440%" height="15" fill="rgb(239,167,4)"/><text x="94.3781%" y="191.50"></text></g><g><title>async-redis`hashbrown::map::make_hash (40 samples, 0.01%)</title><rect x="94.3121%" y="165" width="0.0134%" height="15" fill="rgb(209,217,16)"/><text x="94.5621%" y="175.50"></text></g><g><title>async-redis`hashbrown::map::make_hash (329 samples, 0.11%)</title><rect x="94.4192%" y="133" width="0.1104%" height="15" fill="rgb(219,88,35)"/><text x="94.6692%" y="143.50"></text></g><g><title>async-redis`&lt;std::collections::hash::map::DefaultHasher as core::hash::Hasher&gt;::write (277 samples, 0.09%)</title><rect x="94.4366%" y="117" width="0.0930%" height="15" fill="rgb(220,193,23)"/><text x="94.6866%" y="127.50"></text></g><g><title>libsystem_platform.dylib`_platform_bzero$VARIANT$Haswell (32 samples, 0.01%)</title><rect x="94.5383%" y="117" width="0.0107%" height="15" fill="rgb(230,90,52)"/><text x="94.7883%" y="127.50"></text></g><g><title>async-redis`hashbrown::raw::RawTable&lt;T&gt;::fallible_with_capacity (60 samples, 0.02%)</title><rect x="94.5296%" y="133" width="0.0201%" height="15" fill="rgb(252,106,19)"/><text x="94.7796%" y="143.50"></text></g><g><title>async-redis`hashbrown::raw::RawTable&lt;T&gt;::reserve_rehash (676 samples, 0.23%)</title><rect x="94.3325%" y="149" width="0.2269%" height="15" fill="rgb(206,74,20)"/><text x="94.5825%" y="159.50"></text></g><g><title>async-redis`hashbrown::raw::RawTable&lt;T&gt;::insert (1,814 samples, 0.61%)</title><rect x="94.3255%" y="165" width="0.6090%" height="15" fill="rgb(230,138,44)"/><text x="94.5755%" y="175.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove$VARIANT$Haswell (1,117 samples, 0.37%)</title><rect x="94.5595%" y="149" width="0.3750%" height="15" fill="rgb(235,182,43)"/><text x="94.8095%" y="159.50"></text></g><g><title>libsystem_platform.dylib`_platform_memcmp (192 samples, 0.06%)</title><rect x="94.9355%" y="165" width="0.0645%" height="15" fill="rgb(242,16,51)"/><text x="95.1855%" y="175.50"></text></g><g><title>async-redis`hashbrown::map::HashMap&lt;K,V,S&gt;::insert (2,476 samples, 0.83%)</title><rect x="94.1721%" y="181" width="0.8312%" height="15" fill="rgb(248,9,4)"/><text x="94.4221%" y="191.50"></text></g><g><title>async-redis`dashmap::DashMap&lt;K,V,S&gt;::insert (3,466 samples, 1.16%)</title><rect x="93.8424%" y="197" width="1.1636%" height="15" fill="rgb(210,31,22)"/><text x="94.0924%" y="207.50"></text></g><g><title>async-redis`async_redis::db::DB::set (3,946 samples, 1.32%)</title><rect x="93.6913%" y="213" width="1.3247%" height="15" fill="rgb(239,54,39)"/><text x="93.9413%" y="223.50"></text></g><g><title>async-redis`async_redis::protocol::Encode (33 samples, 0.01%)</title><rect x="95.0160%" y="213" width="0.0111%" height="15" fill="rgb(230,99,41)"/><text x="95.2660%" y="223.50"></text></g><g><title>async-redis`bytes::bytes::shared_drop (38 samples, 0.01%)</title><rect x="95.0305%" y="213" width="0.0128%" height="15" fill="rgb(253,106,12)"/><text x="95.2805%" y="223.50"></text></g><g><title>async-redis`&lt;tokio::sync::broadcast::Waiter as tokio::util::linked_list::Link&gt;::pointers (34 samples, 0.01%)</title><rect x="95.0768%" y="197" width="0.0114%" height="15" fill="rgb(213,46,41)"/><text x="95.3268%" y="207.50"></text></g><g><title>async-redis`tokio::runtime::task::waker::drop_waker (35 samples, 0.01%)</title><rect x="95.0993%" y="197" width="0.0117%" height="15" fill="rgb(215,133,35)"/><text x="95.3493%" y="207.50"></text></g><g><title>async-redis`tokio::runtime::task::state::State::ref_dec (35 samples, 0.01%)</title><rect x="95.0993%" y="181" width="0.0117%" height="15" fill="rgb(213,28,5)"/><text x="95.3493%" y="191.50"></text></g><g><title>async-redis`core::ptr::drop_in_place (241 samples, 0.08%)</title><rect x="95.0432%" y="213" width="0.0809%" height="15" fill="rgb(215,77,49)"/><text x="95.2932%" y="223.50"></text></g><g><title>async-redis`tokio::util::linked_list::LinkedList&lt;L,&lt;L as tokio::util::linked_list::Link&gt;::Target&gt;::remove (39 samples, 0.01%)</title><rect x="95.1111%" y="197" width="0.0131%" height="15" fill="rgb(248,100,22)"/><text x="95.3611%" y="207.50"></text></g><g><title>async-redis`&lt;&amp;std::net::tcp::TcpStream as std::io::Write&gt;::write (83 samples, 0.03%)</title><rect x="95.2114%" y="149" width="0.0279%" height="15" fill="rgb(208,67,9)"/><text x="95.4614%" y="159.50"></text></g><g><title>libsystem_c.dylib`send (30 samples, 0.01%)</title><rect x="95.2450%" y="149" width="0.0101%" height="15" fill="rgb(219,133,21)"/><text x="95.4950%" y="159.50"></text></g><g><title>async-redis`&lt;&amp;mio::net::tcp::stream::TcpStream as std::io::Write&gt;::write (12,948 samples, 4.35%)</title><rect x="95.2020%" y="165" width="4.3468%" height="15" fill="rgb(246,46,29)"/><text x="95.4520%" y="175.50">async..</text></g><g><title>libsystem_kernel.dylib`__sendto (12,790 samples, 4.29%)</title><rect x="95.2551%" y="149" width="4.2937%" height="15" fill="rgb(246,185,52)"/><text x="95.5051%" y="159.50">libsy..</text></g><g><title>async-redis`tokio::coop::CURRENT::__getit (39 samples, 0.01%)</title><rect x="99.5820%" y="149" width="0.0131%" height="15" fill="rgb(252,136,11)"/><text x="99.8320%" y="159.50"></text></g><g><title>async-redis`tokio::io::driver::scheduled_io::ScheduledIo::poll_readiness (42 samples, 0.01%)</title><rect x="99.5951%" y="149" width="0.0141%" height="15" fill="rgb(219,138,53)"/><text x="99.8451%" y="159.50"></text></g><g><title>async-redis`tokio::io::driver::registration::Registration::poll_ready (206 samples, 0.07%)</title><rect x="99.5636%" y="165" width="0.0692%" height="15" fill="rgb(211,51,23)"/><text x="99.8136%" y="175.50"></text></g><g><title>libdyld.dylib`tlv_get_addr (70 samples, 0.02%)</title><rect x="99.6092%" y="149" width="0.0235%" height="15" fill="rgb(247,221,28)"/><text x="99.8592%" y="159.50"></text></g><g><title>async-redis`&lt;tokio::net::tcp::stream::TcpStream as tokio::io::async_write::AsyncWrite&gt;::poll_write (13,319 samples, 4.47%)</title><rect x="95.1621%" y="197" width="4.4713%" height="15" fill="rgb(251,222,45)"/><text x="95.4121%" y="207.50">async..</text></g><g><title>async-redis`tokio::io::driver::registration::Registration::poll_write_io (13,262 samples, 4.45%)</title><rect x="95.1812%" y="181" width="4.4522%" height="15" fill="rgb(217,162,53)"/><text x="95.4312%" y="191.50">async..</text></g><g><title>async-redis`tokio::io::util::buf_writer::BufWriter&lt;W&gt;::flush_buf (13,437 samples, 4.51%)</title><rect x="95.1305%" y="213" width="4.5109%" height="15" fill="rgb(229,93,14)"/><text x="95.3805%" y="223.50">async..</text></g><g><title>async-redis`tokio::util::rand::thread_rng_n (35 samples, 0.01%)</title><rect x="99.6562%" y="213" width="0.0117%" height="15" fill="rgb(209,67,49)"/><text x="99.9062%" y="223.50"></text></g><g><title>libsystem_malloc.dylib`szone_size (95 samples, 0.03%)</title><rect x="99.6972%" y="197" width="0.0319%" height="15" fill="rgb(213,87,29)"/><text x="99.9472%" y="207.50"></text></g><g><title>libsystem_malloc.dylib`tiny_size (92 samples, 0.03%)</title><rect x="99.6982%" y="181" width="0.0309%" height="15" fill="rgb(205,151,52)"/><text x="99.9482%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`free (180 samples, 0.06%)</title><rect x="99.6700%" y="213" width="0.0604%" height="15" fill="rgb(253,215,39)"/><text x="99.9200%" y="223.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_add_ptr (57 samples, 0.02%)</title><rect x="99.7831%" y="181" width="0.0191%" height="15" fill="rgb(221,220,41)"/><text x="100.0331%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`free_tiny (248 samples, 0.08%)</title><rect x="99.7304%" y="213" width="0.0833%" height="15" fill="rgb(218,133,21)"/><text x="99.9804%" y="223.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (163 samples, 0.05%)</title><rect x="99.7590%" y="197" width="0.0547%" height="15" fill="rgb(221,193,43)"/><text x="100.0090%" y="207.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_remove_ptr (34 samples, 0.01%)</title><rect x="99.8023%" y="181" width="0.0114%" height="15" fill="rgb(240,128,52)"/><text x="100.0523%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`szone_size (36 samples, 0.01%)</title><rect x="99.8157%" y="213" width="0.0121%" height="15" fill="rgb(253,114,12)"/><text x="100.0657%" y="223.50"></text></g><g><title>async-redis`&lt;core::future::from_generator::GenFuture&lt;T&gt; as core::future::future::Future&gt;::poll (286,541 samples, 96.19%)</title><rect x="3.6384%" y="229" width="96.1947%" height="15" fill="rgb(215,223,47)"/><text x="3.8884%" y="239.50">async-redis`&lt;core::future::from_generator::GenFuture&lt;T&gt; as core::future::future::Future&gt;::poll</text></g><g><title>async-redis`bytes::bytes::static_drop (32 samples, 0.01%)</title><rect x="99.8832%" y="229" width="0.0107%" height="15" fill="rgb(248,225,23)"/><text x="100.1332%" y="239.50"></text></g><g><title>libsystem_malloc.dylib`free (49 samples, 0.02%)</title><rect x="99.9127%" y="229" width="0.0164%" height="15" fill="rgb(250,108,0)"/><text x="100.1627%" y="239.50"></text></g><g><title>async-redis`&lt;core::future::from_generator::GenFuture&lt;T&gt; as core::future::future::Future&gt;::poll (287,002 samples, 96.35%)</title><rect x="3.5814%" y="245" width="96.3495%" height="15" fill="rgb(228,208,7)"/><text x="3.8314%" y="255.50">async-redis`&lt;core::future::from_generator::GenFuture&lt;T&gt; as core::future::future::Future&gt;::poll</text></g><g><title>async-redis`&lt;std::panic::AssertUnwindSafe&lt;F&gt; as core::ops::function::FnOnce&lt;()&gt;&gt;::call_once (287,066 samples, 96.37%)</title><rect x="3.5636%" y="261" width="96.3710%" height="15" fill="rgb(244,45,10)"/><text x="3.8136%" y="271.50">async-redis`&lt;std::panic::AssertUnwindSafe&lt;F&gt; as core::ops::function::FnOnce&lt;()&gt;&gt;::call_once</text></g><g><title>async-redis`tokio::runtime::task::raw::poll (287,217 samples, 96.42%)</title><rect x="3.5243%" y="277" width="96.4217%" height="15" fill="rgb(207,125,25)"/><text x="3.7743%" y="287.50">async-redis`tokio::runtime::task::raw::poll</text></g><g><title>async-redis`std::thread::local::LocalKey&lt;T&gt;::with (287,470 samples, 96.51%)</title><rect x="3.4531%" y="293" width="96.5066%" height="15" fill="rgb(210,195,18)"/><text x="3.7031%" y="303.50">async-redis`std::thread::local::LocalKey&lt;T&gt;::with</text></g><g><title>async-redis`tokio::runtime::task::raw::poll (35 samples, 0.01%)</title><rect x="99.9654%" y="293" width="0.0117%" height="15" fill="rgb(249,80,12)"/><text x="100.2154%" y="303.50"></text></g><g><title>async-redis`tokio::runtime::thread_pool::worker::Context::run_task (288,009 samples, 96.69%)</title><rect x="3.2923%" y="309" width="96.6875%" height="15" fill="rgb(221,65,9)"/><text x="3.5423%" y="319.50">async-redis`tokio::runtime::thread_pool::worker::Context::run_task</text></g><g><title>async-redis`tokio::runtime::thread_pool::worker::Context::run (294,796 samples, 98.97%)</title><rect x="1.0273%" y="325" width="98.9660%" height="15" fill="rgb(235,49,36)"/><text x="1.2773%" y="335.50">async-redis`tokio::runtime::thread_pool::worker::Context::run</text></g><g><title>async-redis`tokio::runtime::thread_pool::worker::Core::drain_pending_drop (40 samples, 0.01%)</title><rect x="99.9799%" y="309" width="0.0134%" height="15" fill="rgb(225,32,20)"/><text x="100.2299%" y="319.50"></text></g><g><title>all (297,876 samples, 100%)</title><rect x="0.0000%" y="517" width="100.0000%" height="15" fill="rgb(215,141,46)"/><text x="0.2500%" y="527.50"></text></g><g><title>libsystem_pthread.dylib`thread_start (294,828 samples, 98.98%)</title><rect x="1.0232%" y="501" width="98.9768%" height="15" fill="rgb(250,160,47)"/><text x="1.2732%" y="511.50">libsystem_pthread.dylib`thread_start</text></g><g><title>libsystem_pthread.dylib`_pthread_start (294,828 samples, 98.98%)</title><rect x="1.0232%" y="485" width="98.9768%" height="15" fill="rgb(216,222,40)"/><text x="1.2732%" y="495.50">libsystem_pthread.dylib`_pthread_start</text></g><g><title>async-redis`std::sys::unix::thread::Thread::new::thread_start (294,828 samples, 98.98%)</title><rect x="1.0232%" y="469" width="98.9768%" height="15" fill="rgb(234,217,39)"/><text x="1.2732%" y="479.50">async-redis`std::sys::unix::thread::Thread::new::thread_start</text></g><g><title>async-redis`core::ops::function::FnOnce::call_once{{vtable.shim}} (294,828 samples, 98.98%)</title><rect x="1.0232%" y="453" width="98.9768%" height="15" fill="rgb(207,178,40)"/><text x="1.2732%" y="463.50">async-redis`core::ops::function::FnOnce::call_once{{vtable.shim}}</text></g><g><title>async-redis`std::sys_common::backtrace::__rust_begin_short_backtrace (294,828 samples, 98.98%)</title><rect x="1.0232%" y="437" width="98.9768%" height="15" fill="rgb(221,136,13)"/><text x="1.2732%" y="447.50">async-redis`std::sys_common::backtrace::__rust_begin_short_backtrace</text></g><g><title>async-redis`tokio::runtime::blocking::pool::Inner::run (294,828 samples, 98.98%)</title><rect x="1.0232%" y="421" width="98.9768%" height="15" fill="rgb(249,199,10)"/><text x="1.2732%" y="431.50">async-redis`tokio::runtime::blocking::pool::Inner::run</text></g><g><title>async-redis`tokio::runtime::task::harness::Harness&lt;T,S&gt;::poll (294,828 samples, 98.98%)</title><rect x="1.0232%" y="405" width="98.9768%" height="15" fill="rgb(249,222,13)"/><text x="1.2732%" y="415.50">async-redis`tokio::runtime::task::harness::Harness&lt;T,S&gt;::poll</text></g><g><title>async-redis`&lt;std::panic::AssertUnwindSafe&lt;F&gt; as core::ops::function::FnOnce&lt;()&gt;&gt;::call_once (294,828 samples, 98.98%)</title><rect x="1.0232%" y="389" width="98.9768%" height="15" fill="rgb(244,185,38)"/><text x="1.2732%" y="399.50">async-redis`&lt;std::panic::AssertUnwindSafe&lt;F&gt; as core::ops::function::FnOnce&lt;()&gt;&gt;::call_once</text></g><g><title>async-redis`tokio::runtime::task::core::Core&lt;T,S&gt;::poll (294,828 samples, 98.98%)</title><rect x="1.0232%" y="373" width="98.9768%" height="15" fill="rgb(236,202,9)"/><text x="1.2732%" y="383.50">async-redis`tokio::runtime::task::core::Core&lt;T,S&gt;::poll</text></g><g><title>async-redis`tokio::runtime::thread_pool::worker::run (294,828 samples, 98.98%)</title><rect x="1.0232%" y="357" width="98.9768%" height="15" fill="rgb(250,229,37)"/><text x="1.2732%" y="367.50">async-redis`tokio::runtime::thread_pool::worker::run</text></g><g><title>async-redis`tokio::macros::scoped_tls::ScopedKey&lt;T&gt;::set (294,828 samples, 98.98%)</title><rect x="1.0232%" y="341" width="98.9768%" height="15" fill="rgb(206,174,23)"/><text x="1.2732%" y="351.50">async-redis`tokio::macros::scoped_tls::ScopedKey&lt;T&gt;::set</text></g></svg></svg>

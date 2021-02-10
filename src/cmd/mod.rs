@@ -1,11 +1,11 @@
 pub mod get;
-use std::str::FromStr;
+use std::vec::IntoIter;
 
-use anyhow::{anyhow, Error, Result};
+use anyhow::{Error, Result};
 
 use get::*;
 pub mod set;
-use crate::{db::DB, protocol::Frame, BytesToString};
+use crate::{db::DB, protocol::Frame, utils::get_integer};
 use set::*;
 
 pub mod debug;
@@ -29,6 +29,7 @@ pub trait ExecDB {
 }
 
 #[derive(Debug, err_derive::Error)]
+#[allow(dead_code)]
 pub enum ParseError {
     #[error(display = "NotArray")]
     NotArray,
@@ -46,6 +47,8 @@ pub enum CommandError {
     MissingOperand,
     #[error(display = "NotImplemented")]
     NotImplemented,
+    #[error(display = "InvalidOperand")]
+    InvalidOperand,
 }
 
 fn missing_operand() -> Error {
@@ -56,43 +59,22 @@ fn missing_operation() -> Error {
     Error::new(CommandError::MissingOperation)
 }
 
-pub struct Parser<'a> {
-    idx: usize,
-    frames: &'a Vec<Frame>,
+pub struct CommandParser {
+    frames: IntoIter<Frame>,
 }
 
-impl<'a> Parser<'a> {
-    fn new(frame: &'a Frame) -> Result<Parser<'a>> {
+impl CommandParser {
+    fn new(frame: Frame) -> Result<CommandParser> {
         match frame {
             Frame::Arrays(arr) => Ok(Self {
-                idx: 0,
-                frames: &arr.val,
+                frames: arr.val.into_iter(),
             }),
             _ => Err(Error::new(ParseError::NotArray)),
         }
     }
 
-    fn next(&mut self) -> Option<&Frame> {
-        if self.idx < self.frames.len() {
-            self.idx += 1;
-            return Some(&self.frames[self.idx - 1]);
-        }
-        None
-    }
-
-    fn next_string(&mut self) -> Result<Option<String>> {
-        let next_frame = match self.next() {
-            Some(x) => x,
-            None => {
-                return Ok(None);
-            }
-        };
-        match next_frame {
-            Frame::SimpleString(s) | Frame::BulkStrings(s) => {
-                Ok(Some(BytesToString!(s, ParseError::Other)))
-            }
-            _ => Err(Error::new(ParseError::NotString)),
-        }
+    fn next(&mut self) -> Option<Frame> {
+        self.frames.next()
     }
 
     fn next_bytes(&mut self) -> Result<Option<Bytes>> {
@@ -103,35 +85,27 @@ impl<'a> Parser<'a> {
             }
         };
         match next_frame {
-            Frame::SimpleString(s) | Frame::BulkStrings(s) => Ok(Some(s.clone())),
+            Frame::SimpleString(s) | Frame::BulkStrings(s) => Ok(Some(s)),
             _ => Err(Error::new(ParseError::NotString)),
         }
     }
 
-    fn next_number<T>(&mut self) -> Result<Option<T>>
-    where
-        T: FromStr,
-    {
-        let next_string = self.next_string()?;
-        if next_string.is_none() {
-            return Ok(None);
-        }
-        let maybe_num = next_string.unwrap();
-        match maybe_num.parse::<T>() {
-            Ok(num) => Ok(Some(num)),
-            Err(_) => Err(anyhow!("not a number: {}", maybe_num)),
+    fn next_integer(&mut self) -> Result<Option<i64>> {
+        match self.next_bytes()? {
+            Some(v) => get_integer(&v).map(|v| Some(v)),
+            None => Ok(None),
         }
     }
 }
 
 impl Command {
-    pub fn new(frame: &Frame) -> Result<Self> {
-        let mut parser = Parser::new(frame)?;
-        let cmd_string = parser.next_string()?.ok_or_else(missing_operation)?;
-        match &cmd_string.to_lowercase()[..] {
-            "get" => Ok(Get::new(&mut parser)?.into()),
-            "set" => Ok(Set::new(&mut parser)?.into()),
-            "debug" => Ok(Debug::new(&mut parser)?.into()),
+    pub fn new(frame: Frame) -> Result<Self> {
+        let mut parser = CommandParser::new(frame)?;
+        let cmd_string = parser.next_bytes()?.ok_or_else(missing_operation)?;
+        match &cmd_string.to_ascii_lowercase()[..] {
+            b"get" => Ok(Get::new(&mut parser)?.into()),
+            b"set" => Ok(Set::new(&mut parser)?.into()),
+            b"debug" => Ok(Debug::new(&mut parser)?.into()),
             _ => Err(Error::new(CommandError::NotImplemented)),
         }
     }

@@ -1,14 +1,16 @@
 use crate::{cmd::*, protocol::Frame};
 use bytes::*;
+use debug::DebugCommand;
+use rustc_hash::FxHashMap;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap};
 use tokio::{
     select,
-    sync::{broadcast, mpsc},
+    sync::{broadcast, mpsc, oneshot},
     time::{Duration, Instant},
 };
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 pub enum DBReturn {
     Single(Option<Bytes>),
@@ -17,8 +19,7 @@ pub enum DBReturn {
 
 #[derive(Debug)]
 pub enum TaskParam {
-    Task((Command, u64, Option<mpsc::Sender<Frame>>)),
-    Remove(u64),
+    Task((Command, oneshot::Sender<Frame>)),
 }
 
 #[derive(Debug)]
@@ -30,7 +31,7 @@ pub struct Entry {
 
 #[derive(Debug)]
 pub struct DB {
-    pub database: HashMap<Bytes, Entry>,
+    pub database: FxHashMap<Bytes, Entry>,
     pub expiration: BTreeMap<(Instant, u64), Bytes>,
     pub when: Option<Instant>,
     pub id: usize,
@@ -39,7 +40,7 @@ pub struct DB {
 impl DB {
     fn new(id: usize) -> Self {
         Self {
-            database: HashMap::new(),
+            database: FxHashMap::default(),
             expiration: BTreeMap::new(),
             when: None,
             id,
@@ -53,30 +54,30 @@ impl DB {
             .map(|v| v.data.clone())
     }
 
-    pub fn debug(&self, key: &Bytes) -> DBReturn {
-        match &key.to_ascii_lowercase()[..] {
-            b"key_num" => {
+    pub fn debug(&self, key: &DebugCommand) -> DBReturn {
+        match key {
+            DebugCommand::KeyNum => {
                 return DBReturn::Single(Some(Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.len()
                 ))));
             }
-            b"total_key_len" => {
+            DebugCommand::TotalKeyLen => {
                 return DBReturn::Single(Some(Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.keys().fold(0, |res, b| res + b.len())
                 ))));
             }
-            b"total_val_len" => {
+            DebugCommand::TotalValLen => {
                 return DBReturn::Single(Some(Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.values().fold(0, |res, b| res + b.data.len())
                 ))));
             }
-            b"random_keys" => {
+            DebugCommand::RandomKeys => {
                 const TAKE: usize = 5;
                 let mut idxs: Vec<usize> = (0..self.database.len()).collect();
                 idxs.shuffle(&mut thread_rng());
@@ -93,7 +94,6 @@ impl DB {
                 }
                 return DBReturn::List(res);
             }
-            _ => DBReturn::Single(None),
         }
     }
 
@@ -110,14 +110,13 @@ impl DB {
 }
 
 pub async fn database_manager(
-    mut tasks_rx: mpsc::Receiver<TaskParam>,
+    mut tasks_rx: mpsc::UnboundedReceiver<TaskParam>,
     mut shutdown: broadcast::Receiver<()>,
     _shutdown_complete_tx: mpsc::Sender<()>,
     taskid: usize,
 ) {
     let mut when: Option<Instant> = None;
     let mut db = DB::new(taskid);
-    let mut registered_handler = BTreeMap::new();
     info!("[{}] starting backgroud task", taskid);
 
     loop {
@@ -126,27 +125,17 @@ pub async fn database_manager(
         select! {
             _ = shutdown.recv() => {
                 info!("[{}] shutting down backgroud task", taskid);
-                drop(db);
                 return;
             }
             res = tasks_rx.recv() => {
                 if res.is_none() {
                     continue;
                 }
-                let (cmd, handler_id, maybe_ret_tx) = match res.unwrap() {
-                    TaskParam::Remove(handler_id) => {
-                        registered_handler.remove(&handler_id);
-                        continue;
-                    }
+                let (cmd, ret_tx) = match res.unwrap() {
                     TaskParam::Task(v) => v,
                 };
-                if registered_handler.get(&handler_id).is_none() {
-                    let t = maybe_ret_tx.unwrap();
-                    registered_handler.insert(handler_id, t);
-                }
-                let ret_tx = registered_handler.get(&handler_id).unwrap();
-                debug!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
-                let _ = ret_tx.send(cmd.exec(&mut db)).await;
+                trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
+                let _ = ret_tx.send(cmd.exec(&mut db));
             }
             _ = tokio::time::sleep_until(
                 when.map(|v| v.max(now + Duration::new(10, 0)))
@@ -160,21 +149,13 @@ pub async fn database_manager(
                         if expire_next <= now {
                             let key = db.expiration.remove(&(expire_next, id)).unwrap();
                             db.database.remove(&key);
-                            debug!("[{}] collecting expired key({:?}): {:?}", taskid, &now, &key);
+                            trace!("[{}] collecting expired key({:?}): {:?}", taskid, &now, &key);
                         } else {
                             when = Some(expire_next);
                             break;
                         }
                     }
                 }
-
-                if registered_handler.len() > 0 {
-                    registered_handler = registered_handler
-                        .into_iter()
-                        .filter(|(_, b)| !b.is_closed())
-                        .collect();
-                }
-
             }
         }
     }

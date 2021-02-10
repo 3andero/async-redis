@@ -8,7 +8,7 @@ pub struct Get {
 }
 
 impl Get {
-    pub fn new(parser: &mut Parser) -> Result<Get> {
+    pub fn new(parser: &mut CommandParser) -> Result<Get> {
         Ok(Self {
             key: parser.next_bytes()?.ok_or_else(missing_operand)?,
             nounce: 0,

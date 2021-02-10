@@ -1,15 +1,49 @@
 use crate::protocol::*;
 
-fn encode_iter(frame: &Frame, buf: &mut BytesMut) {
+struct EfficientBuffer {
+    hot_buf: BytesMut,
+    fragments: Vec<Bytes>,
+}
+
+impl EfficientBuffer {
+    fn new(frame: &Frame) -> Self {
+        Self {
+            hot_buf: BytesMut::with_capacity(frame.raw_bytes_len() - frame.msg_len()),
+            fragments: Vec::with_capacity(frame.msg_num() * 2 + 1),
+        }
+    }
+
+    fn put_u8(&mut self, byte: u8) {
+        self.hot_buf.put_u8(byte);
+    }
+
+    fn put_slice(&mut self, slice: &[u8]) {
+        self.hot_buf.put_slice(slice);
+    }
+
+    fn append_bytes(&mut self, msg: Bytes) {
+        self.flush();
+        self.fragments.push(msg);
+    }
+
+    fn flush(&mut self) {
+        if self.hot_buf.len() > 0 {
+            let frag = self.hot_buf.split_to(self.hot_buf.len()).freeze();
+            self.fragments.push(frag);
+        }
+    }
+}
+
+fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
     match frame {
         Frame::SimpleString(msg) => {
             buf.put_u8(SIMPLE_STRING_MARK);
-            buf.put_slice(msg);
+            buf.append_bytes(msg.clone());
             buf.put_slice(DLEM_MARK);
         }
         Frame::Errors(msg) => {
             buf.put_u8(ERROR_MARK);
-            buf.put_slice(msg);
+            buf.append_bytes(msg.clone());
             buf.put_slice(DLEM_MARK);
         }
         &Frame::Integers(num) => {
@@ -21,7 +55,7 @@ fn encode_iter(frame: &Frame, buf: &mut BytesMut) {
             buf.put_u8(BULK_STRING_MARK);
             buf.put_slice(&integer_to_bytes(msg.len())[..]);
             buf.put_slice(DLEM_MARK);
-            buf.put_slice(msg);
+            buf.append_bytes(msg.clone());
             buf.put_slice(DLEM_MARK);
         }
         Frame::Arrays(arr) => {
@@ -33,29 +67,34 @@ fn encode_iter(frame: &Frame, buf: &mut BytesMut) {
             }
         }
         Frame::NullString => {
-            buf.put_slice(NIL_STRING_FRAME);
+            buf.append_bytes(Bytes::from_static(NIL_STRING_FRAME));
         }
         Frame::NullArray => {
-            buf.put_slice(NIL_ARRAY_FRAME);
+            buf.append_bytes(Bytes::from_static(NIL_ARRAY_FRAME));
         }
         Frame::Ok => {
-            buf.put_slice(OK_FRAME);
+            buf.append_bytes(Bytes::from_static(OK_FRAME));
         }
     };
 }
 
-pub fn encode(frame: &Frame) -> Result<Bytes> {
+pub fn encode(frame: &Frame) -> Result<Vec<Bytes>> {
     match frame {
         Frame::NullString => {
-            return Ok(Bytes::from(NIL_STRING_FRAME));
+            return Ok(vec![Bytes::from_static(NIL_STRING_FRAME)]);
         }
         Frame::Ok => {
-            return Ok(Bytes::from(OK_FRAME));
+            return Ok(vec![Bytes::from_static(OK_FRAME)]);
+        }
+        Frame::NullArray => {
+            return Ok(vec![Bytes::from_static(NIL_ARRAY_FRAME)]);
         }
         _ => (),
     }
 
-    let mut buf = BytesMut::with_capacity(frame.len());
+    // let mut buf = BytesMut::with_capacity(frame.raw_bytes_len());
+    let mut buf = EfficientBuffer::new(frame);
     encode_iter(frame, &mut buf);
-    Ok(buf.freeze())
+    buf.flush();
+    Ok(buf.fragments)
 }

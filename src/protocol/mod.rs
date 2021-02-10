@@ -11,15 +11,40 @@ pub mod reusable_buf;
 #[derive(Debug)]
 pub struct FrameArrays {
     pub val: Vec<Frame>,
-    _encode_length: usize,
+    _raw_bytes_length: usize,
+    _msg_length: usize,
+    _msg_num: usize,
+    _initialized: bool,
 }
 
 impl FrameArrays {
     pub fn new(val: Vec<Frame>) -> Self {
+        let (_raw_bytes_length, _msg_length, _msg_num) =
+            val.iter().fold((0, 0, 0), |(a, b, c), f| {
+                (a + f.raw_bytes_len(), b + f.msg_len(), c + f.msg_num())
+            });
         Self {
-            _encode_length: 3 + len_of(val.len()) + val.iter().fold(0, |res, f| res + f.len()),
+            _raw_bytes_length: _raw_bytes_length + 3 + len_of(val.len()),
+            _msg_length,
+            _msg_num,
             val,
+            _initialized: true,
         }
+    }
+
+    pub fn init_for_encoding(&mut self) {
+        if self._initialized {
+            return;
+        }
+        let (_raw_bytes_length, _msg_length, _msg_num) =
+            self.val.iter().fold((0, 0, 0), |(a, b, c), f| {
+                (a + f.raw_bytes_len(), b + f.msg_len(), c + f.msg_num())
+            });
+
+        self._raw_bytes_length = _raw_bytes_length + 3 + len_of(self.val.len());
+        self._msg_length = _msg_length;
+        self._msg_num = _msg_num;
+        self._initialized = true;
     }
 }
 
@@ -55,13 +80,35 @@ impl From<Vec<Option<Bytes>>> for Frame {
 }
 
 impl Frame {
-    fn len(&self) -> usize {
+    fn raw_bytes_len(&self) -> usize {
         match self {
             Frame::Ok | Frame::NullString | Frame::NullArray => 5,
             Frame::SimpleString(v) | Frame::Errors(v) => v.len() + 3,
             Frame::BulkStrings(v) => 5 + v.len() + len_of(v.len()),
             &Frame::Integers(v) => len_of(v) + 3,
-            Frame::Arrays(v) => v._encode_length,
+            Frame::Arrays(v) => v._raw_bytes_length,
+        }
+    }
+
+    fn msg_len(&self) -> usize {
+        match self {
+            Frame::Ok | Frame::NullString | Frame::NullArray => 5,
+            Frame::SimpleString(v) | Frame::Errors(v) | Frame::BulkStrings(v) => v.len(),
+            Frame::Arrays(v) => v._msg_length,
+            _ => 0,
+        }
+    }
+
+    fn msg_num(&self) -> usize {
+        match self {
+            Frame::Ok
+            | Frame::NullString
+            | Frame::NullArray
+            | Frame::SimpleString(_)
+            | Frame::Errors(_)
+            | Frame::BulkStrings(_) => 1,
+            Frame::Arrays(v) => v._msg_num,
+            _ => 0,
         }
     }
 }
@@ -137,7 +184,11 @@ macro_rules! FrameTests {
                 }
             };
             let decoded = encode(&res).unwrap();
-            let equal = decoded.to_vec() == param.as_bytes();
+            let mut final_byte = BytesMut::new();
+            for b in decoded.iter() {
+                final_byte.put_slice(&b[..]);
+            }
+            let equal = final_byte.to_vec() == param.as_bytes();
             println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", param, buf, res, decoded, err_msg, equal);
         }
     };
