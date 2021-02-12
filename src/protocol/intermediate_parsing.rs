@@ -12,10 +12,11 @@ pub struct IntermediateToken {
     is_complete: bool,
     data: Option<Frame>,
     tmp_buf: Option<BytesMut>,
+    unpack_bulk_string: bool,
 }
 
 impl IntermediateToken {
-    pub fn new(token_type: u8) -> Self {
+    pub fn new(token_type: u8, unpack_bulk_string: bool) -> Self {
         // println!("new token: {}", token_type as char);
         Self {
             token_type,
@@ -25,6 +26,7 @@ impl IntermediateToken {
             is_complete: false,
             data: None,
             tmp_buf: None,
+            unpack_bulk_string,
         }
     }
 
@@ -89,7 +91,11 @@ impl IntermediateToken {
         }
         if &buf.chunk()[span..span + 2] == b"\r\n" {
             let mut tmp_buf = self.tmp_buf.take().unwrap();
-            tmp_buf.extend_from_slice(&buf[..span]);
+            if self.unpack_bulk_string {
+                tmp_buf.extend_from_slice(&buf[..span]);
+            } else {
+                tmp_buf.extend_from_slice(&buf[..span+2]);
+            }
             buf.advance(span + 2);
             return Ok(tmp_buf.freeze());
         } else {
@@ -122,11 +128,24 @@ impl IntermediateToken {
                         return Ok(());
                     } else {
                         self.expected_len = Some(maybe_len as usize);
-                        self.tmp_buf = Some(BytesMut::with_capacity(maybe_len as usize));
+                        if self.unpack_bulk_string {
+                            self.tmp_buf = Some(BytesMut::with_capacity(maybe_len as usize));
+                        } else {
+                            let mut tmp_buf =
+                                BytesMut::with_capacity(maybe_len as usize + next_line.len() + 3);
+                            tmp_buf.put_u8(BULK_STRING_MARK);
+                            tmp_buf.extend_from_slice(&next_line[..]);
+                            tmp_buf.extend_from_slice(DLEM_MARK);
+                            self.tmp_buf = Some(tmp_buf);
+                        }
                     }
                 }
 
-                self.data = Some(Frame::BulkStrings(self.read_expected(buf)?));
+                if self.unpack_bulk_string {
+                    self.data = Some(Frame::BulkStrings(self.read_expected(buf)?));
+                } else {
+                    self.data = Some(Frame::BulkStringsEncoded(self.read_expected(buf)?));
+                }
                 self.is_complete = true;
                 self.is_recognized = true;
             }

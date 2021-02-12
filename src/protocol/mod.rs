@@ -8,7 +8,7 @@ pub mod encode;
 mod intermediate_parsing;
 pub mod reusable_buf;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FrameArrays {
     pub val: Vec<Frame>,
     _raw_bytes_length: usize,
@@ -50,34 +50,41 @@ impl FrameArrays {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Frame {
     SimpleString(Bytes),
     Errors(Bytes),
     Integers(i64),
     BulkStrings(Bytes),
+    BulkStringsEncoded(Bytes),
     NullString,
     Arrays(FrameArrays),
     Ok,
     NullArray,
 }
 
-impl From<Bytes> for Frame {
-    fn from(bt: Bytes) -> Frame {
-        return Frame::BulkStrings(bt);
-    }
-}
+// impl From<Bytes> for Frame {
+//     fn from(bt: Bytes) -> Frame {
+//         return Frame::BulkStrings(bt);
+//     }
+// }
 
-impl From<Option<Bytes>> for Frame {
-    fn from(bt: Option<Bytes>) -> Frame {
-        return bt.map_or(Frame::NullString, |x| x.into());
-    }
-}
+// impl From<Option<Bytes>> for Frame {
+//     fn from(bt: Option<Bytes>) -> Frame {
+//         return bt.map_or(Frame::NullString, |x| x.into());
+//     }
+// }
 
-impl From<Vec<Option<Bytes>>> for Frame {
-    fn from(arr: Vec<Option<Bytes>>) -> Frame {
-        let x = arr.into_iter().map(|x| x.into()).collect();
-        Frame::Arrays(FrameArrays::new(x))
+// impl From<Vec<Option<Bytes>>> for Frame {
+//     fn from(arr: Vec<Option<Bytes>>) -> Frame {
+//         let x = arr.into_iter().map(|x| x.into()).collect();
+//         Frame::Arrays(FrameArrays::new(x))
+//     }
+// }
+
+impl From<Vec<Frame>> for Frame {
+    fn from(arr: Vec<Frame>) -> Frame {
+        Frame::Arrays(FrameArrays::new(arr))
     }
 }
 
@@ -88,11 +95,12 @@ impl Frame {
             Frame::SimpleString(v) | Frame::Errors(v) => v.len() + 3,
             Frame::BulkStrings(v) => 5 + v.len() + len_of(v.len()),
             &Frame::Integers(v) => len_of(v) + 3,
+            Frame::BulkStringsEncoded(v) => v.len(),
             Frame::Arrays(v) => v._raw_bytes_length,
         }
     }
 
-    fn msg_len(&self) -> usize {
+    pub fn msg_len(&self) -> usize {
         match self {
             Frame::Ok | Frame::NullString | Frame::NullArray => 5,
             Frame::SimpleString(v) | Frame::Errors(v) | Frame::BulkStrings(v) => {
@@ -102,8 +110,9 @@ impl Frame {
                     0
                 }
             }
+            Frame::BulkStringsEncoded(v) => v.len(),
             Frame::Arrays(v) => v._msg_length,
-            _ => 0,
+            Frame::Integers(_) => 0,
         }
     }
 
@@ -118,7 +127,7 @@ impl Frame {
                 }
             }
             Frame::Arrays(v) => v._msg_num,
-            _ => 0,
+            Frame::Integers(_) | Frame::BulkStringsEncoded(_) => 0,
         }
     }
 }
@@ -161,13 +170,6 @@ const DLEM_MARK: &'static [u8] = b"\r\n";
 
 #[macro_export]
 macro_rules! FrameTests {
-    (DisplayDecodeFn $($cmd:expr),*) => {
-        let mut params = vec![$(Bytes::from($cmd.to_owned()),)*];
-        for param in params.iter_mut() {
-            let res = decode(&mut param.clone());
-            println!("{:?} => {:?}", param, res);
-        }
-    };
     (DisplayIntermediateParser $($cmd:expr),*) => {
         let mut params = vec![$($cmd,)*];
         for param in params.iter_mut() {
@@ -187,19 +189,29 @@ macro_rules! FrameTests {
             buf.reserve(param.len());
             buf.put_slice(&param.as_bytes());
             let mut parser = decode::IntermediateParser::new();
-            let (res, err_msg) = match parser.parse(&mut buf) {
-                Ok(v) => (v, String::from("")),
-                Err(e) => {
-                    (Frame::NullString, format!("{:?}", e))
+            let mut start = 0;
+            while buf.len() > 0 {
+                let len0 = buf.len();
+                let (res, err_msg) = match parser.parse(&mut buf) {
+                    Ok(v) => (v, String::from("")),
+                    Err(e) => {
+                        (Frame::NullString, format!("{:?}", e))
+                    }
+                };
+                let len1 = buf.len();
+                let nstart = start + len0 - len1;
+                let decoded = encode(&res).unwrap();
+                let mut final_byte = BytesMut::new();
+                for b in decoded.iter() {
+                    final_byte.put_slice(&b[..]);
                 }
-            };
-            let decoded = encode(&res).unwrap();
-            let mut final_byte = BytesMut::new();
-            for b in decoded.iter() {
-                final_byte.put_slice(&b[..]);
+                let equal = final_byte == &param[start..nstart];
+                println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", &param[start..nstart], buf, res, decoded, err_msg, equal);
+                start = nstart;
+                if err_msg.len() > 0 {
+                    break;
+                }
             }
-            let equal = final_byte.to_vec() == param.as_bytes();
-            println!("{:?} => {:?} + {:?} => {:?} | {} | Equal={}", param, buf, res, decoded, err_msg, equal);
         }
     };
 }
@@ -207,23 +219,7 @@ macro_rules! FrameTests {
 #[cfg(test)]
 mod tests {
     use crate::protocol::*;
-    use decode::*;
     use encode::*;
-    #[test]
-    fn displays_decode() {
-        FrameTests!(DisplayDecodeFn
-            "*0\r\n",
-            "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
-            "*3\r\n:1\r\n:2\r\n:3\r\n",
-            "*-1\r\n",
-            "*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Foo\r\n-Bar\r\n",
-            "$6\r\nfoobar\r\n",
-            "+OK\r\n",
-            "$3\r\nfoobar\r\n",
-            "$6\r\nfoar\r\n",
-            "$6\r\rfoobar\r\n"
-        );
-    }
 
     #[test]
     fn displays_parser() {
@@ -249,6 +245,7 @@ mod tests {
             "$0\r\n\r\n",
             "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n",
             "*3\r\n:1\r\n:2\r\n:3\r\n",
+            "*3\r\n$3\r\nset\r\n$3\r\nabc\r\n$2\r\nab\r\n*3\r\n$3\r\nset\r\n$3\r\nbbc\r\n$2\r\nbb\r\n",
             "*12\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n$-1\r\n",
             "*-1\r\n",
             "$-1\r\n",

@@ -12,10 +12,10 @@ use tokio::{
 };
 use tracing::{debug, info, trace};
 
-pub enum DBReturn {
-    Single(Option<Bytes>),
-    List(Vec<Option<Bytes>>),
-}
+// pub enum DBReturn {
+//     Single(Option<Bytes>),
+//     List(Vec<Option<Bytes>>),
+// }
 
 #[derive(Debug)]
 pub enum TaskParam {
@@ -24,7 +24,7 @@ pub enum TaskParam {
 
 #[derive(Debug)]
 pub struct Entry {
-    data: Bytes,
+    data: Frame,
     expiration: Option<Instant>,
     nounce: u64,
 }
@@ -47,35 +47,35 @@ impl DB {
         }
     }
 
-    pub fn get(&self, key: &Bytes) -> Option<Bytes> {
+    pub fn get(&self, key: &Bytes) -> Frame {
         self.database
             .get(key)
             .filter(|v| v.expiration.is_none() || v.expiration.unwrap() > Instant::now())
-            .map(|v| v.data.clone())
+            .map_or_else(|| Frame::NullString, |v| v.data.clone())
     }
 
-    pub fn debug(&self, key: &DebugCommand) -> DBReturn {
+    pub fn debug(&self, key: &DebugCommand) -> Frame {
         match key {
             DebugCommand::KeyNum => {
-                return DBReturn::Single(Some(Bytes::from(format!(
+                return Frame::BulkStrings(Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.len()
-                ))));
+                )));
             }
             DebugCommand::TotalKeyLen => {
-                return DBReturn::Single(Some(Bytes::from(format!(
+                return Frame::BulkStrings(Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.keys().fold(0, |res, b| res + b.len())
-                ))));
+                )));
             }
             DebugCommand::TotalValLen => {
-                return DBReturn::Single(Some(Bytes::from(format!(
+                return Frame::BulkStrings(Bytes::from(format!(
                     "[{}]{}",
                     self.id,
-                    self.database.values().fold(0, |res, b| res + b.data.len())
-                ))));
+                    self.database.values().fold(0, |res, b| res + b.data.msg_len())
+                )));
             }
             DebugCommand::RandomKeys => {
                 const TAKE: usize = 5;
@@ -86,18 +86,18 @@ impl DB {
                 let mut res = Vec::with_capacity(TAKE);
                 for (idx, key) in self.database.keys().enumerate() {
                     if idx == rand_idx[res.len()] {
-                        res.push(Some(key.clone()));
+                        res.push(Frame::BulkStrings(key.clone()));
                     }
                     if res.len() == TAKE {
                         break;
                     }
                 }
-                return DBReturn::List(res);
+                return res.into();
             }
         }
     }
 
-    pub fn set(&mut self, key: Bytes, data: Bytes, nounce: u64, expiration: Option<Instant>) {
+    pub fn set(&mut self, key: Bytes, data: Frame, nounce: u64, expiration: Option<Instant>) {
         self.database.insert(
             key,
             Entry {

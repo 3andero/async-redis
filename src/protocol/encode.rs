@@ -70,6 +70,9 @@ fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
             }
             buf.put_slice(DLEM_MARK);
         }
+        Frame::BulkStringsEncoded(msg) => {
+            buf.append_bytes(msg);
+        }
         Frame::Arrays(arr) => {
             buf.put_u8(ARRAY_MARK);
             buf.put_slice(&integer_to_bytes(arr.val.len())[..]);

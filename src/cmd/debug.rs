@@ -1,5 +1,4 @@
 use crate::cmd::*;
-use crate::db::DBReturn;
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
@@ -37,10 +36,7 @@ impl Debug {
 
 impl ExecDB for Debug {
     fn exec(&self, db: &mut DB) -> Frame {
-        match db.debug(&self.key) {
-            DBReturn::List(arr) => arr.into(),
-            DBReturn::Single(opt_b) => opt_b.into(),
-        }
+        db.debug(&self.key)
     }
 
     fn get_key(&self) -> &Bytes {
