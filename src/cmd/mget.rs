@@ -3,11 +3,11 @@ use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct MGet {
-    keys: Vec<Bytes>,
+    keys: Vec<MiniCommand>,
 }
 
 impl MGet {
-    pub fn new(keys: Vec<Bytes>) -> MGet {
+    pub fn new(keys: Vec<MiniCommand>) -> MGet {
         Self { keys }
     }
 }
@@ -16,49 +16,61 @@ impl OneshotExecDB for MGet {
     fn exec(self, db: &mut DB) -> Frame {
         self.keys
             .iter()
-            .map(|v| db.get(v))
+            .map(|cmd| {
+                if let MiniCommand::Single(v) = cmd {
+                    return db.get(v);
+                } else {
+                    panic!()
+                }
+            })
             .collect::<Vec<_>>()
             .into()
     }
 
     fn get_key(&self) -> &[u8] {
-        &self.keys[0].as_ref()
+        &self.keys[0].get_key()
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct MGetDispatcher {
-    keys: Vec<Bytes>,
+    cmds: Vec<MiniCommand>,
     db_amount: usize,
-    tbl: Vec<Vec<Bytes>>,
+    cmds_tbl: Vec<Vec<MiniCommand>>,
+    order_tbl: Vec<Vec<usize>>,
     len: usize,
 }
 
 impl TraverseExecDB for MGetDispatcher {
     fn next_command(&mut self) -> IDCommandPair {
-        let id = self.tbl.len() - 1;
-        let v = self.tbl.pop().unwrap();
+        let id = self.cmds_tbl.len() - 1;
+        let v = self.cmds_tbl.pop().unwrap();
+        let order = self.order_tbl.pop().unwrap();
         if v.len() > 0 {
-            return (id, Some(MGet::new(v).into()));
+            return (id, Some((MGet::new(v).into(), MergeStrategy::Reorder(order))));
         } else {
             return (id, None);
         }
-    }
-    fn next_key(&self) -> Option<&Bytes> {
-        self.keys.last()
-    }
-    fn init(&mut self, db_amount: usize) {
-        self.db_amount = db_amount;
-        self.tbl = vec![Vec::with_capacity(self.len / db_amount + 1); db_amount];
-    }
-    fn move_to(&mut self, db_id: usize) {
-        let p = self.keys.pop().unwrap();
-        self.tbl[db_id].push(p);
     }
 
     fn len(&self) -> usize {
         self.len
     }
+
+    fn init_tbls(&mut self, vec: &Vec<usize>) {
+        self.cmds_tbl = vec.iter().map(|v| Vec::with_capacity(*v)).collect();
+        self.order_tbl = vec.iter().map(|v| Vec::with_capacity(*v)).collect();
+    }
+
+    fn iter_data(&self) -> Iter<MiniCommand> {
+        self.cmds.iter()
+    }
+
+    fn move_last_to(&mut self, db_id: usize, original_idx: usize) {
+        self.cmds_tbl[db_id].push(self.cmds.pop().unwrap());
+        self.order_tbl[db_id].push(original_idx);
+    }
+
 }
 
 impl MGetDispatcher {
@@ -66,15 +78,16 @@ impl MGetDispatcher {
         if parser.len() == 0 {
             return Err(Error::new(CommandError::MissingOperand));
         }
-        let mut keys = Vec::with_capacity(parser.len());
+        let mut cmds = Vec::with_capacity(parser.len());
         while let Some(p) = parser.next_bytes()? {
-            keys.push(p);
+            cmds.push(p.into());
         }
-        let len = keys.len();
+        let len = cmds.len();
         Ok(Self {
-            keys,
+            cmds,
             db_amount: 0,
-            tbl: Vec::new(),
+            cmds_tbl: Vec::new(),
+            order_tbl: Vec::new(),
             len,
         })
     }

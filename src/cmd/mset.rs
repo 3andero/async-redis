@@ -3,11 +3,11 @@ use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct MSet {
-    pairs: Vec<(Bytes, Bytes)>,
+    pairs: Vec<MiniCommand>,
 }
 
 impl MSet {
-    pub fn new(pairs: Vec<(Bytes, Bytes)>) -> Self {
+    pub fn new(pairs: Vec<MiniCommand>) -> Self {
         Self { pairs }
     }
 }
@@ -16,50 +16,68 @@ impl OneshotExecDB for MSet {
     fn exec(self, db: &mut DB) -> Frame {
         let nounce0 = db.counter;
         db.counter += self.pairs.len() as u64;
-        self.pairs.into_iter().fold(nounce0 + 1, |i, (k, v)| {
-            db.set(k, v, i, None);
-            i + 1
-        });
+        self.pairs
+            .into_iter()
+            .fold(nounce0 + 1, |i, cmd| {
+                if let MiniCommand::Pair((k, v)) = cmd {
+                    db.set(k, v, i, None);
+                }
+                i + 1
+            });
         Frame::Ok
     }
 
     fn get_key(&self) -> &[u8] {
-        &self.pairs[0].0.as_ref()
+        &self.pairs[0].get_key()
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct MSetDispatcher {
-    pairs: Vec<(Bytes, Bytes)>,
+    cmds: Vec<MiniCommand>,
     db_amount: usize,
-    tbl: Vec<Vec<(Bytes, Bytes)>>,
+    cmds_tbl: Vec<Vec<MiniCommand>>,
     len: usize,
+    first_valid: bool,
 }
 
 impl TraverseExecDB for MSetDispatcher {
     fn next_command(&mut self) -> IDCommandPair {
-        let id = self.tbl.len() - 1;
-        let v = self.tbl.pop().unwrap();
-        if v.len() > 0 {
-            return (id, Some(MSet::new(v).into()));
+        let id = self.cmds_tbl.len() - 1;
+        let pairs = self.cmds_tbl.pop().unwrap();
+        // let order = self.order_tbl.pop().unwrap();
+        if pairs.len() > 0 {
+            return (
+                id,
+                Some((
+                    MSet::new(pairs).into(),
+                    if self.first_valid {
+                        self.first_valid = false;
+                        MergeStrategy::Insert(0)
+                    } else {
+                        MergeStrategy::Drop
+                    },
+                )),
+            );
         } else {
             return (id, None);
         }
     }
-    fn next_key(&self) -> Option<&Bytes> {
-        self.pairs.last().map(|(b, _)| b)
-    }
-    fn init(&mut self, db_amount: usize) {
-        self.db_amount = db_amount;
-        self.tbl = vec![Vec::with_capacity(self.len / db_amount + 1); db_amount];
-    }
-    fn move_to(&mut self, db_id: usize) {
-        let p = self.pairs.pop().unwrap();
-        self.tbl[db_id].push(p);
-    }
 
     fn len(&self) -> usize {
         1
+    }
+
+    fn init_tbls(&mut self, vec: &Vec<usize>) {
+        self.cmds_tbl = vec.iter().map(|v| Vec::with_capacity(*v)).collect();
+    }
+
+    fn iter_data(&self) -> Iter<MiniCommand> {
+        self.cmds.iter()
+    }
+
+    fn move_last_to(&mut self, db_id: usize, _: usize) {
+        self.cmds_tbl[db_id].push(self.cmds.pop().unwrap());
     }
 }
 
@@ -71,14 +89,15 @@ impl MSetDispatcher {
         }
         let mut pairs = Vec::with_capacity(len);
         while let Some(p) = parser.next_bytes_pair()? {
-            pairs.push(p);
+            pairs.push(p.into());
         }
 
         Ok(Self {
-            pairs,
+            cmds: pairs,
             db_amount: 0,
-            tbl: Vec::new(),
+            cmds_tbl: Vec::new(),
             len,
+            first_valid: true,
         })
     }
 }

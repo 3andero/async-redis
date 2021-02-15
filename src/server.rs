@@ -194,33 +194,46 @@ impl Handler {
             let command = Command::new(frame);
             let ret_frame = match command {
                 Ok(Command::Traverse(mut cmd)) => {
-                    cmd.init(self.dispatcher.num_threads);
-                    cmd.dispatch(|key: &[u8]| self.dispatcher.determine_database(key));
+                    let thread_num = self.dispatcher.num_threads;
+                    cmd.dispatch(thread_num, |key: &[u8]| {
+                        self.dispatcher.determine_database(key)
+                    });
                     let expected_amount_ret = cmd.len();
-                    let mut ret = Vec::with_capacity(expected_amount_ret);
-                    for _ in 0..self.dispatcher.num_threads {
+
+                    let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
+                    unsafe {
+                        ret.set_len(expected_amount_ret);
+                    }
+
+                    for _ in 0..thread_num {
                         let (ret_tx, ret_rx) = oneshot::channel();
                         let (db_id, cmd_copy) = cmd.next_command();
                         if cmd_copy.is_none() {
                             continue;
                         }
+                        let (cmd_copy, merge_strategy) = cmd_copy.unwrap();
                         self.dispatcher.tasks_tx[db_id]
-                            .send(TaskParam::OneshotTask((cmd_copy.unwrap(), ret_tx)))?;
+                            .send(TaskParam::OneshotTask((cmd_copy, ret_tx)))?;
 
-                        let ret_frame = ret_rx.await.unwrap();
-                        match ret_frame {
-                            Frame::Arrays(mut arr) => {
-                                if ret.len() + arr.len() <= expected_amount_ret {
-                                    ret.append(&mut arr);
-                                } else {
-                                    panic!(
-                                        "the amount of return packets exceeds what was expected"
-                                    );
+                        match merge_strategy {
+                            MergeStrategy::Drop => {
+                                drop(ret_rx);
+                            }
+                            MergeStrategy::Insert(idx) => {
+                                let f  = ret_rx.await.unwrap();
+                                unsafe {
+                                    ret.as_mut_ptr().add(idx).write(f);
                                 }
                             }
-                            x => {
-                                if ret.len() < expected_amount_ret {
-                                    ret.push(x);
+                            MergeStrategy::Reorder(order) => {
+                                if let Frame::Arrays(arr) = ret_rx.await.unwrap() {
+                                    for (f, o) in arr.into_iter().zip(order) {
+                                        unsafe {
+                                            ret.as_mut_ptr().add(o).write(f);
+                                        }
+                                    }
+                                } else {
+                                    panic!("Only Frame::Array can be reordered.");
                                 }
                             }
                         }
