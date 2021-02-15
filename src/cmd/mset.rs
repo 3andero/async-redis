@@ -16,14 +16,12 @@ impl OneshotExecDB for MSet {
     fn exec(self, db: &mut DB) -> Frame {
         let nounce0 = db.counter;
         db.counter += self.pairs.len() as u64;
-        self.pairs
-            .into_iter()
-            .fold(nounce0 + 1, |i, cmd| {
-                if let MiniCommand::Pair((k, v)) = cmd {
-                    db.set(k, v, i, None);
-                }
-                i + 1
-            });
+        self.pairs.into_iter().fold(nounce0 + 1, |i, cmd| {
+            if let MiniCommand::Pair((k, v)) = cmd {
+                db.set(k, v, i, None);
+            }
+            i + 1
+        });
         Frame::Ok
     }
 
@@ -88,7 +86,7 @@ impl MSetDispatcher {
             return Err(Error::new(CommandError::MissingOperand));
         }
         let mut pairs = Vec::with_capacity(len);
-        while let Some(p) = parser.next_bytes_pair()? {
+        while let Some(p) = parser.next_kv_pair()? {
             pairs.push(p.into());
         }
 

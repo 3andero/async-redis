@@ -4,14 +4,14 @@ use tokio::time::{Duration, Instant};
 #[derive(Debug, Clone)]
 pub struct Set {
     key: Bytes,
-    val: Bytes,
+    val: Frame,
     expiration: Option<u64>,
 }
 
 impl Set {
     pub fn new(parser: &mut CommandParser) -> Result<Set> {
         let k = parser.next_bytes()?.ok_or_else(missing_operand)?;
-        let v = parser.next_bytes()?.ok_or_else(missing_operand)?;
+        let v = parser.next().ok_or_else(missing_operand)?;
         let expire = match parser.next_integer()? {
             Some(v) => {
                 if v < 0 {

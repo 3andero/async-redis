@@ -41,12 +41,16 @@ pub struct DxDispatcher {
 impl TraverseExecDB for DxDispatcher {
     fn next_command(&mut self) -> IDCommandPair {
         self.db_amount -= 1;
-        (self.db_amount, Some((Dx::new(self.key.clone()).into(), MergeStrategy::Insert(self.db_amount))))
+        (
+            self.db_amount,
+            Some((
+                Dx::new(self.key.clone()).into(),
+                MergeStrategy::Insert(self.db_amount),
+            )),
+        )
     }
 
-    fn move_last_to(&mut self, _: usize, _: usize) {
-        
-    }
+    fn move_last_to(&mut self, _: usize, _: usize) {}
 
     fn iter_data(&self) -> Iter<MiniCommand> {
         unimplemented!()

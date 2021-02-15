@@ -8,7 +8,7 @@ struct EfficientBuffer {
 impl EfficientBuffer {
     fn new(frame: &Frame) -> Self {
         Self {
-            hot_buf: BytesMut::with_capacity(frame.raw_bytes_len() - frame.msg_len()),
+            hot_buf: BytesMut::with_capacity(frame.raw_bytes_len() - frame.encode_msg_len()),
             fragments: Vec::with_capacity(frame.msg_num() * 2 + 1),
         }
     }

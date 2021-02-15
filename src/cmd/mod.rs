@@ -1,16 +1,16 @@
+pub mod command_parser;
 pub mod diagnose;
 pub mod get;
 pub mod mget;
 pub mod mset;
 pub mod set;
-pub mod command_parser;
 
+use command_parser::*;
 use diagnose::*;
 use get::*;
 use mget::*;
 use mset::*;
 use set::*;
-use command_parser::*;
 
 use anyhow::{Error, Result};
 use std::slice::Iter;
@@ -63,7 +63,7 @@ pub trait MiniCommandTrait {
     fn get_key(&self) -> &[u8];
 }
 
-pub type _Pair = (Bytes, Bytes);
+pub type _Pair = (Bytes, Frame);
 
 impl MiniCommandTrait for _Pair {
     fn get_key(&self) -> &[u8] {
@@ -90,12 +90,15 @@ pub trait TraverseExecDB {
     fn init_tbls(&mut self, vec: &Vec<usize>);
     fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
         let mut tbl_len = vec![0; db_amount];
-        let db_ids: Vec<usize> = self.iter_data().map(|v| {
-            let id = dispatch_fn(v.get_key());
-            tbl_len[id] += 1 as usize;
-            id
-        }).collect();
-        
+        let db_ids: Vec<usize> = self
+            .iter_data()
+            .map(|v| {
+                let id = dispatch_fn(v.get_key());
+                tbl_len[id] += 1 as usize;
+                id
+            })
+            .collect();
+
         self.init_tbls(&tbl_len);
 
         let mut order = db_ids.len();

@@ -23,4 +23,3 @@ impl OneshotExecDB for Get {
         &self.key.as_ref()
     }
 }
-

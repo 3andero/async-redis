@@ -1,8 +1,11 @@
-
-use std::vec::IntoIter;
-use crate::{utils::get_integer, protocol::Frame, cmd::{ParseError, CommandError}};
+use crate::{
+    cmd::{CommandError, ParseError},
+    protocol::Frame,
+    utils::get_integer,
+};
 use anyhow::{Error, Result};
 use bytes::Bytes;
+use std::vec::IntoIter;
 
 pub struct CommandParser {
     frames: IntoIter<Frame>,
@@ -45,7 +48,7 @@ impl CommandParser {
         }
     }
 
-    pub fn next_bytes_pair(&mut self) -> Result<Option<(Bytes, Bytes)>> {
+    pub fn next_kv_pair(&mut self) -> Result<Option<(Bytes, Frame)>> {
         let p1 = match self.next_bytes()? {
             Some(b) => b,
             None => {
@@ -53,7 +56,7 @@ impl CommandParser {
             }
         };
 
-        let p2 = match self.next_bytes()? {
+        let p2 = match self.next() {
             Some(b) => b,
             None => {
                 return Err(Error::new(CommandError::MissingOperand));

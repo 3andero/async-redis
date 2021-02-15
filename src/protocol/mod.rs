@@ -19,7 +19,7 @@ pub struct FrameArrays {
 
 const SMALL_BYTES_THRESHOLD: usize = 64;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Frame {
     SimpleString(Bytes),
     Errors(Bytes),
@@ -67,7 +67,7 @@ impl Frame {
         }
     }
 
-    fn msg_len(&self) -> usize {
+    fn encode_msg_len(&self) -> usize {
         match self {
             Frame::Ok | Frame::NullString | Frame::NullArray => 5,
             Frame::SimpleString(v) | Frame::Errors(v) | Frame::BulkStrings(v) => {
@@ -77,8 +77,8 @@ impl Frame {
                     0
                 }
             }
-            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.msg_len()),
-            _ => 0,
+            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.encode_msg_len()),
+            Frame::Integers(_) => 0,
         }
     }
 
@@ -93,7 +93,16 @@ impl Frame {
                 }
             }
             Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.msg_num()),
-            _ => 0,
+            Frame::Integers(_) => 0,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Frame::Ok | Frame::NullString | Frame::NullArray => 0,
+            Frame::SimpleString(b) | Frame::Errors(b) | Frame::BulkStrings(b) => b.len(),
+            Frame::Arrays(v) => v.len(),
+            Frame::Integers(_) => 0,
         }
     }
 }

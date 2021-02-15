@@ -220,7 +220,7 @@ impl Handler {
                                 drop(ret_rx);
                             }
                             MergeStrategy::Insert(idx) => {
-                                let f  = ret_rx.await.unwrap();
+                                let f = ret_rx.await.unwrap();
                                 unsafe {
                                     ret.as_mut_ptr().add(idx).write(f);
                                 }

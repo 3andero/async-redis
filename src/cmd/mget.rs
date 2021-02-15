@@ -47,7 +47,10 @@ impl TraverseExecDB for MGetDispatcher {
         let v = self.cmds_tbl.pop().unwrap();
         let order = self.order_tbl.pop().unwrap();
         if v.len() > 0 {
-            return (id, Some((MGet::new(v).into(), MergeStrategy::Reorder(order))));
+            return (
+                id,
+                Some((MGet::new(v).into(), MergeStrategy::Reorder(order))),
+            );
         } else {
             return (id, None);
         }
@@ -70,7 +73,6 @@ impl TraverseExecDB for MGetDispatcher {
         self.cmds_tbl[db_id].push(self.cmds.pop().unwrap());
         self.order_tbl[db_id].push(original_idx);
     }
-
 }
 
 impl MGetDispatcher {

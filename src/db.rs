@@ -19,7 +19,7 @@ pub enum TaskParam {
 
 #[derive(Debug)]
 pub struct Entry {
-    data: Bytes,
+    data: Frame,
     expiration: Option<Instant>,
     nounce: u64,
 }
@@ -48,7 +48,7 @@ impl DB {
         self.database
             .get(key)
             .filter(|v| v.expiration.is_none() || v.expiration.unwrap() > Instant::now())
-            .map_or_else(|| Frame::NullString, |v| v.data.clone().into())
+            .map_or_else(|| Frame::NullString, |v| v.data.clone())
     }
 
     pub fn diagnose(&self, key: &DxCommand) -> Frame {
@@ -93,7 +93,7 @@ impl DB {
         }
     }
 
-    pub fn set(&mut self, key: Bytes, data: Bytes, nounce: u64, expiration: Option<Instant>) {
+    pub fn set(&mut self, key: Bytes, data: Frame, nounce: u64, expiration: Option<Instant>) {
         self.database.insert(
             key,
             Entry {
