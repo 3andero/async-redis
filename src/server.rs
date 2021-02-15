@@ -6,18 +6,10 @@ use std::{
     sync::Arc,
 };
 
-use bytes::Bytes;
 use tokio::{net::TcpListener, spawn, sync::*};
 use tracing::*;
 
-use crate::{
-    cmd::*,
-    connection::*,
-    db::*,
-    protocol::{Frame, FrameArrays},
-    shutdown::Shutdown,
-    Result,
-};
+use crate::{cmd::*, connection::*, db::*, protocol::Frame, shutdown::Shutdown, Result};
 
 #[allow(dead_code)]
 fn calculate_hash<T: Hash>(t: &T) -> usize {
@@ -67,7 +59,7 @@ impl Dispatcher {
     //     calculate_hash(key) % self.num_threads
     // }
 
-    pub fn determine_database(&self, key: &Bytes) -> usize {
+    pub fn determine_database(&self, key: &[u8]) -> usize {
         // Leave the high 7 bits for the HashBrown SIMD tag.
         let mut hash = 0;
         for b in key {
@@ -201,31 +193,56 @@ impl Handler {
 
             let command = Command::new(frame);
             let ret_frame = match command {
-                Ok(cmd @ Command::Debug(_)) => {
-                    let mut ret = Vec::with_capacity(self.dispatcher.num_threads);
-                    for db_id in 0..self.dispatcher.num_threads {
+                Ok(Command::Traverse(mut cmd)) => {
+                    cmd.init(self.dispatcher.num_threads);
+                    cmd.dispatch(|key: &[u8]| self.dispatcher.determine_database(key));
+                    let expected_amount_ret = cmd.len();
+                    let mut ret = Vec::with_capacity(expected_amount_ret);
+                    for _ in 0..self.dispatcher.num_threads {
                         let (ret_tx, ret_rx) = oneshot::channel();
-                        let cmd_copy = cmd.clone();
+                        let (db_id, cmd_copy) = cmd.next_command();
+                        if cmd_copy.is_none() {
+                            continue;
+                        }
                         self.dispatcher.tasks_tx[db_id]
-                            .send(TaskParam::Task((cmd_copy, ret_tx)))?;
+                            .send(TaskParam::OneshotTask((cmd_copy.unwrap(), ret_tx)))?;
 
-                        ret.push(ret_rx.await.unwrap());
+                        let ret_frame = ret_rx.await.unwrap();
+                        match ret_frame {
+                            Frame::Arrays(mut arr) => {
+                                if ret.len() + arr.len() <= expected_amount_ret {
+                                    ret.append(&mut arr);
+                                } else {
+                                    panic!(
+                                        "the amount of return packets exceeds what was expected"
+                                    );
+                                }
+                            }
+                            x => {
+                                if ret.len() < expected_amount_ret {
+                                    ret.push(x);
+                                }
+                            }
+                        }
                     }
-                    Frame::Arrays(FrameArrays::new(ret))
+
+                    if ret.len() == 1 {
+                        ret.pop().unwrap()
+                    } else {
+                        Frame::Arrays(ret)
+                    }
                 }
-                Ok(mut cmd) => {
+                Ok(Command::Oneshot(cmd)) => {
                     trace!(
                         "[{}]<{}>parsed command: {:?}",
                         self.id,
                         self.connection.id,
                         cmd
                     );
-                    let nounce = self.dispatcher.counter.fetch_add(1, Relaxed);
                     let (ret_tx, ret_rx) = oneshot::channel();
-                    cmd.set_nounce(nounce);
                     let db_id = self.dispatcher.determine_database(cmd.get_key());
 
-                    self.dispatcher.tasks_tx[db_id].send(TaskParam::Task((cmd, ret_tx)))?;
+                    self.dispatcher.tasks_tx[db_id].send(TaskParam::OneshotTask((cmd, ret_tx)))?;
 
                     ret_rx.await.unwrap()
                 }
@@ -235,6 +252,7 @@ impl Handler {
                         return Err(e);
                     }
                 },
+                Ok(Command::HoldOn(_)) => todo!(),
             };
             trace!(
                 "[{}]<{}>ret_frame: {:?}",

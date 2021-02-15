@@ -6,7 +6,6 @@ pub struct Set {
     key: Bytes,
     val: Bytes,
     expiration: Option<u64>,
-    nounce: u64,
 }
 
 impl Set {
@@ -26,43 +25,34 @@ impl Set {
             key: k,
             val: v,
             expiration: expire,
-            nounce: 0,
         })
     }
 }
 
-impl ExecDB for Set {
-    fn exec(&self, db: &mut DB) -> Frame {
+impl OneshotExecDB for Set {
+    fn exec(self, db: &mut DB) -> Frame {
         let now = Instant::now();
         let expiration = self.expiration.map(|v| now + Duration::new(v, 0));
+        let nounce = db.counter;
+        db.counter += 1;
         if expiration.is_none() {
-            db.set(self.key.clone(), self.val.clone(), self.nounce, None);
+            db.set(self.key, self.val, nounce, None);
             return Frame::Ok;
         }
         let expiration = expiration.unwrap();
         if expiration == now {
             return Frame::Ok;
         } else {
-            db.set(
-                self.key.clone(),
-                self.val.clone(),
-                self.nounce,
-                Some(expiration),
-            );
+            db.set(self.key.clone(), self.val, nounce, Some(expiration));
         }
-        db.expiration
-            .insert((expiration, self.nounce), self.key.clone());
+        db.expiration.insert((expiration, nounce), self.key);
 
         db.when
             .map_or_else(|| Some(expiration), |v| Some(v.min(expiration)));
         Frame::Ok
     }
 
-    fn get_key(&self) -> &Bytes {
-        &self.key
-    }
-
-    fn set_nounce(&mut self, nounce: u64) {
-        self.nounce = nounce;
+    fn get_key(&self) -> &[u8] {
+        &self.key.as_ref()
     }
 }

@@ -72,9 +72,9 @@ fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
         }
         Frame::Arrays(arr) => {
             buf.put_u8(ARRAY_MARK);
-            buf.put_slice(&integer_to_bytes(arr.val.len())[..]);
+            buf.put_slice(&integer_to_bytes(arr.len())[..]);
             buf.put_slice(DLEM_MARK);
-            for f in &arr.val {
+            for f in arr {
                 encode_iter(&f, buf);
             }
         }

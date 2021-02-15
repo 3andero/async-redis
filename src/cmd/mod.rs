@@ -1,32 +1,73 @@
+pub mod diagnose;
 pub mod get;
-use std::vec::IntoIter;
-
-use anyhow::{Error, Result};
-
-use get::*;
+pub mod mget;
+pub mod mset;
 pub mod set;
-use crate::{db::DB, protocol::Frame, utils::get_integer};
+
+use diagnose::*;
+use get::*;
+use mget::*;
+use mset::*;
 use set::*;
 
-pub mod debug;
+use anyhow::{Error, Result};
+use std::vec::IntoIter;
+
+use crate::{db::DB, protocol::Frame, utils::get_integer};
+
 use bytes::*;
-use debug::*;
 use enum_dispatch::*;
+
+#[allow(dead_code)]
+pub enum Command {
+    Oneshot(OneshotCommand),
+    Traverse(TraverseCommand),
+    HoldOn(HoldOnCommand),
+}
 
 #[enum_dispatch]
 #[derive(Debug, Clone)]
-pub enum Command {
+pub enum OneshotCommand {
     Get,
     Set,
-    Debug,
+    MGet,
+    MSet,
+    Dx,
 }
 
-#[enum_dispatch(Command)]
-pub trait ExecDB {
-    fn exec(&self, db: &mut DB) -> Frame;
-    fn get_key(&self) -> &Bytes;
-    fn set_nounce(&mut self, nounce: u64);
+#[enum_dispatch(OneshotCommand)]
+pub trait OneshotExecDB {
+    fn exec(self, db: &mut DB) -> Frame;
+    fn get_key(&self) -> &[u8];
 }
+
+#[enum_dispatch]
+#[derive(Debug, Clone)]
+pub enum TraverseCommand {
+    MSet(MSetDispatcher),
+    MGet(MGetDispatcher),
+    Dx(DxDispatcher),
+}
+
+type IDCommandPair = (usize, Option<OneshotCommand>);
+
+#[enum_dispatch(TraverseCommand)]
+pub trait TraverseExecDB {
+    fn len(&self) -> usize;
+    fn next_command(&mut self) -> IDCommandPair;
+    fn next_key(&self) -> Option<&Bytes>;
+    fn init(&mut self, db_amount: usize);
+    fn move_to(&mut self, db_id: usize);
+    fn dispatch(&mut self, dispatch_fn: impl Fn(&[u8]) -> usize) {
+        while let Some(k) = self.next_key() {
+            let id = dispatch_fn(k);
+            // println!("key: {:?}, id: {}", k, id);
+            self.move_to(id);
+        }
+    }
+}
+
+pub enum HoldOnCommand {}
 
 #[derive(Debug, err_derive::Error)]
 #[allow(dead_code)]
@@ -61,20 +102,30 @@ fn missing_operation() -> Error {
 
 pub struct CommandParser {
     frames: IntoIter<Frame>,
+    len: usize,
 }
 
 impl CommandParser {
     fn new(frame: Frame) -> Result<CommandParser> {
         match frame {
-            Frame::Arrays(arr) => Ok(Self {
-                frames: arr.val.into_iter(),
-            }),
+            Frame::Arrays(arr) => {
+                let len = arr.len();
+                Ok(Self {
+                    frames: arr.into_iter(),
+                    len,
+                })
+            }
             _ => Err(Error::new(ParseError::NotArray)),
         }
     }
 
     fn next(&mut self) -> Option<Frame> {
+        self.len = if self.len > 0 { self.len - 1 } else { 0 };
         self.frames.next()
+    }
+
+    fn len(&self) -> usize {
+        self.len
     }
 
     fn next_bytes(&mut self) -> Result<Option<Bytes>> {
@@ -90,6 +141,24 @@ impl CommandParser {
         }
     }
 
+    fn next_bytes_pair(&mut self) -> Result<Option<(Bytes, Bytes)>> {
+        let p1 = match self.next_bytes()? {
+            Some(b) => b,
+            None => {
+                return Ok(None);
+            }
+        };
+
+        let p2 = match self.next_bytes()? {
+            Some(b) => b,
+            None => {
+                return Err(Error::new(CommandError::MissingOperand));
+            }
+        };
+
+        Ok(Some((p1, p2)))
+    }
+
     fn next_integer(&mut self) -> Result<Option<i64>> {
         match self.next_bytes()? {
             Some(v) => get_integer(&v).map(|v| Some(v)),
@@ -103,9 +172,11 @@ impl Command {
         let mut parser = CommandParser::new(frame)?;
         let cmd_string = parser.next_bytes()?.ok_or_else(missing_operation)?;
         match &cmd_string.to_ascii_lowercase()[..] {
-            b"get" => Ok(Get::new(&mut parser)?.into()),
-            b"set" => Ok(Set::new(&mut parser)?.into()),
-            b"debug" => Ok(Debug::new(&mut parser)?.into()),
+            b"get" => Ok(Command::Oneshot(Get::new(&mut parser)?.into())),
+            b"set" => Ok(Command::Oneshot(Set::new(&mut parser)?.into())),
+            b"mset" => Ok(Command::Traverse(MSetDispatcher::new(&mut parser)?.into())),
+            b"mget" => Ok(Command::Traverse(MGetDispatcher::new(&mut parser)?.into())),
+            b"dx" => Ok(Command::Traverse(DxDispatcher::new(&mut parser)?.into())),
             _ => Err(Error::new(CommandError::NotImplemented)),
         }
     }
