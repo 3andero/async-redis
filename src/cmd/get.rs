@@ -16,7 +16,7 @@ impl Get {
 
 impl OneshotExecDB for Get {
     fn exec(self, db: &mut DB) -> Frame {
-        db.get(&self.key).into()
+        db.get(&self.key)
     }
 
     fn get_key(&self) -> &[u8] {

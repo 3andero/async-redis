@@ -19,9 +19,9 @@ pub enum TaskParam {
 
 #[derive(Debug)]
 pub struct Entry {
-    data: Frame,
-    expiration: Option<Instant>,
-    nounce: u64,
+    pub data: Frame,
+    pub expiration: Option<Instant>,
+    pub nounce: u64,
 }
 
 #[derive(Debug)]

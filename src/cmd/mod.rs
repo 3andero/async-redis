@@ -1,6 +1,7 @@
 pub mod command_parser;
 pub mod diagnose;
 pub mod get;
+pub mod incr;
 pub mod mget;
 pub mod mset;
 pub mod set;
@@ -8,14 +9,16 @@ pub mod set;
 use command_parser::*;
 use diagnose::*;
 use get::*;
+use incr::*;
 use mget::*;
 use mset::*;
 use set::*;
 
 use anyhow::{Error, Result};
+use utils::rolling_hash_const;
 use std::slice::Iter;
 
-use crate::{db::DB, protocol::Frame};
+use crate::{db::DB, protocol::Frame, utils};
 
 use bytes::*;
 use enum_dispatch::*;
@@ -35,6 +38,7 @@ pub enum OneshotCommand {
     MGet,
     MSet,
     Dx,
+    Incr,
 }
 
 #[enum_dispatch(OneshotCommand)]
@@ -138,6 +142,8 @@ pub enum CommandError {
     NotImplemented,
     #[error(display = "InvalidOperand")]
     InvalidOperand,
+    #[error(display = "InvalidOperation")]
+    InvalidOperation,
 }
 
 fn missing_operand() -> Error {
@@ -148,16 +154,39 @@ fn missing_operation() -> Error {
     Error::new(CommandError::MissingOperation)
 }
 
+fn rolling_hash(arr: &[u8]) -> Result<usize> {
+    let mut res = 0;
+    for &b in arr {
+        if b <= b'z' && b >= b'a' {
+            res = (res * 26 + (b - b'a') as usize) % utils::PRIME;
+        } else if b <= b'Z' && b >= b'A' {
+            res = (res * 26 + (b - b'A') as usize) % utils::PRIME;
+        } else {
+            return Err(Error::new(CommandError::InvalidOperation));
+        }
+    }
+    Ok(res)
+}
+
+const GET: usize = rolling_hash_const(b"get");
+const SET: usize = rolling_hash_const(b"set");
+const MSET: usize = rolling_hash_const(b"mset");
+const MGET: usize = rolling_hash_const(b"mget");
+const INCR: usize = rolling_hash_const(b"incr");
+const DX: usize = rolling_hash_const(b"dx");
+
 impl Command {
     pub fn new(frame: Frame) -> Result<Self> {
         let mut parser = CommandParser::new(frame)?;
         let cmd_string = parser.next_bytes()?.ok_or_else(missing_operation)?;
-        match &cmd_string.to_ascii_lowercase()[..] {
-            b"get" => Ok(Command::Oneshot(Get::new(&mut parser)?.into())),
-            b"set" => Ok(Command::Oneshot(Set::new(&mut parser)?.into())),
-            b"mset" => Ok(Command::Traverse(MSetDispatcher::new(&mut parser)?.into())),
-            b"mget" => Ok(Command::Traverse(MGetDispatcher::new(&mut parser)?.into())),
-            b"dx" => Ok(Command::Traverse(DxDispatcher::new(&mut parser)?.into())),
+        #[deny(unreachable_patterns)]
+        match rolling_hash(cmd_string.as_ref())? {
+            GET => Ok(Command::Oneshot(Get::new(&mut parser)?.into())),
+            SET => Ok(Command::Oneshot(Set::new(&mut parser)?.into())),
+            MSET => Ok(Command::Traverse(MSetDispatcher::new(&mut parser)?.into())),
+            MGET => Ok(Command::Traverse(MGetDispatcher::new(&mut parser)?.into())),
+            INCR => Ok(Command::Oneshot(Incr::new(&mut parser)?.into())),
+            DX => Ok(Command::Traverse(DxDispatcher::new(&mut parser)?.into())),
             _ => Err(Error::new(CommandError::NotImplemented)),
         }
     }
