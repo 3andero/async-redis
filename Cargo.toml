@@ -1,6 +1,6 @@
 [package]
 name = "async-redis"
-version = "0.4.3"
+version = "0.5.0"
 authors = ["KennyChen <KennyChen6324@gmail.com>"]
 edition = "2018"
 
@@ -23,9 +23,3 @@ futures = "0.3.12"
 rand = "0.8.3"
 rustc-hash = "*"
 jemallocator = "0.3.2"
-
-[http]
-proxy = "127.0.0.1:7890"
-
-[https]
-proxy = "127.0.0.1:7890"  

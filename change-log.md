@@ -41,3 +41,11 @@
     2. implement debug - random_keys
     3. implement list as a return type from database.
     4. remove some unused dependencies.
+
+* 0.4.3 - 4614af16
+    1. vectored write, further reducing copy and improving get performance.
+    2. use jemalloc to improve performance.
+    3. use unbounded mpsc channel to send task.
+    4. use oneshot channel to collect results:
+        simplifing code and improve performance.
+    5. refactor debug command.

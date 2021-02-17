@@ -70,7 +70,7 @@ pub fn get_integer(line: &Bytes) -> Result<i64> {
 const ASSERT: [(); 1] = [()];
 pub const PRIME: usize = 1e9 as usize + 9;
 
-#[allow(unconditional_panic)]
+#[allow(unconditional_panic, unused_assignments)]
 pub const fn rolling_hash_const(arr: &[u8]) -> usize {
     let mut res = 0;
     let mut i = 0;
