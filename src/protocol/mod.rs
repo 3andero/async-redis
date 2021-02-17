@@ -17,47 +17,16 @@ pub struct FrameArrays {
     _initialized: bool,
 }
 
-const SMALL_BYTES_THRESHOLD: usize = 0;
+const SMALL_BYTES_THRESHOLD: usize = 64;
 
-impl FrameArrays {
-    pub fn new(val: Vec<Frame>) -> Self {
-        let (_raw_bytes_length, _msg_length, _msg_num) =
-            val.iter().fold((0, 0, 0), |(a, b, c), f| {
-                (a + f.raw_bytes_len(), b + f.msg_len(), c + f.msg_num())
-            });
-        Self {
-            _raw_bytes_length: _raw_bytes_length + 3 + len_of(val.len()),
-            _msg_length,
-            _msg_num,
-            val,
-            _initialized: true,
-        }
-    }
-
-    pub fn init_for_encoding(&mut self) {
-        if self._initialized {
-            return;
-        }
-        let (_raw_bytes_length, _msg_length, _msg_num) =
-            self.val.iter().fold((0, 0, 0), |(a, b, c), f| {
-                (a + f.raw_bytes_len(), b + f.msg_len(), c + f.msg_num())
-            });
-
-        self._raw_bytes_length = _raw_bytes_length + 3 + len_of(self.val.len());
-        self._msg_length = _msg_length;
-        self._msg_num = _msg_num;
-        self._initialized = true;
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Frame {
     SimpleString(Bytes),
     Errors(Bytes),
     Integers(i64),
     BulkStrings(Bytes),
     NullString,
-    Arrays(FrameArrays),
+    Arrays(Vec<Frame>),
     Ok,
     NullArray,
 }
@@ -77,7 +46,13 @@ impl From<Option<Bytes>> for Frame {
 impl From<Vec<Option<Bytes>>> for Frame {
     fn from(arr: Vec<Option<Bytes>>) -> Frame {
         let x = arr.into_iter().map(|x| x.into()).collect();
-        Frame::Arrays(FrameArrays::new(x))
+        Frame::Arrays(x)
+    }
+}
+
+impl From<Vec<Frame>> for Frame {
+    fn from(arr: Vec<Frame>) -> Frame {
+        Frame::Arrays(arr)
     }
 }
 
@@ -88,11 +63,11 @@ impl Frame {
             Frame::SimpleString(v) | Frame::Errors(v) => v.len() + 3,
             Frame::BulkStrings(v) => 5 + v.len() + len_of(v.len()),
             &Frame::Integers(v) => len_of(v) + 3,
-            Frame::Arrays(v) => v._raw_bytes_length,
+            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.raw_bytes_len()),
         }
     }
 
-    fn msg_len(&self) -> usize {
+    fn encode_msg_len(&self) -> usize {
         match self {
             Frame::Ok | Frame::NullString | Frame::NullArray => 5,
             Frame::SimpleString(v) | Frame::Errors(v) | Frame::BulkStrings(v) => {
@@ -102,8 +77,8 @@ impl Frame {
                     0
                 }
             }
-            Frame::Arrays(v) => v._msg_length,
-            _ => 0,
+            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.encode_msg_len()),
+            Frame::Integers(_) => 0,
         }
     }
 
@@ -117,8 +92,17 @@ impl Frame {
                     0
                 }
             }
-            Frame::Arrays(v) => v._msg_num,
-            _ => 0,
+            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.msg_num()),
+            Frame::Integers(_) => 0,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Frame::Ok | Frame::NullString | Frame::NullArray => 0,
+            Frame::SimpleString(b) | Frame::Errors(b) | Frame::BulkStrings(b) => b.len(),
+            Frame::Arrays(v) => v.len(),
+            Frame::Integers(_) => 0,
         }
     }
 }

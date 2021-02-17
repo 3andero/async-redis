@@ -4,28 +4,22 @@ use anyhow::Result;
 #[derive(Debug, Clone)]
 pub struct Get {
     key: Bytes,
-    nounce: u64,
 }
 
 impl Get {
     pub fn new(parser: &mut CommandParser) -> Result<Get> {
         Ok(Self {
             key: parser.next_bytes()?.ok_or_else(missing_operand)?,
-            nounce: 0,
         })
     }
 }
 
-impl ExecDB for Get {
-    fn exec(&self, db: &mut DB) -> Frame {
-        db.get(&self.key).into()
+impl OneshotExecDB for Get {
+    fn exec(self, db: &mut DB) -> Frame {
+        db.get(&self.key)
     }
 
-    fn get_key(&self) -> &Bytes {
-        &self.key
-    }
-
-    fn set_nounce(&mut self, nounce: u64) {
-        self.nounce = nounce;
+    fn get_key(&self) -> &[u8] {
+        &self.key.as_ref()
     }
 }

@@ -66,3 +66,86 @@ pub fn get_integer(line: &Bytes) -> Result<i64> {
 
     Ok(if neg { -res } else { res })
 }
+
+const ASSERT: [(); 1] = [()];
+pub const PRIME: usize = 1e9 as usize + 9;
+
+#[allow(unconditional_panic)]
+pub const fn rolling_hash_const(arr: &[u8]) -> usize {
+    let mut res = 0;
+    let mut i = 0;
+    if arr.len() >= 1 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (arr[i] - b'a') as usize;
+        i += 1;
+    }
+    if arr.len() >= 2 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 3 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 4 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 5 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 6 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 7 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 8 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 9 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 10 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 11 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 12 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 13 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 14 {
+        ASSERT[!(arr[i] <= b'z' && arr[i] >= b'a') as usize];
+        res = (res * 26 + (arr[i] - b'a') as usize) % PRIME;
+        i += 1;
+    }
+    if arr.len() >= 15 {
+        ASSERT[1];
+    }
+    res
+}

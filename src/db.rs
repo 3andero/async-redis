@@ -1,10 +1,10 @@
 use crate::{cmd::*, protocol::Frame};
 use bytes::*;
-use debug::DebugCommand;
-use rustc_hash::FxHashMap;
+use diagnose::DxCommand;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use std::collections::{BTreeMap};
+use rustc_hash::FxHashMap;
+use std::{cmp::min, collections::BTreeMap};
 use tokio::{
     select,
     sync::{broadcast, mpsc, oneshot},
@@ -12,21 +12,16 @@ use tokio::{
 };
 use tracing::{debug, info, trace};
 
-pub enum DBReturn {
-    Single(Option<Bytes>),
-    List(Vec<Option<Bytes>>),
-}
-
 #[derive(Debug)]
 pub enum TaskParam {
-    Task((Command, oneshot::Sender<Frame>)),
+    OneshotTask((OneshotCommand, oneshot::Sender<Frame>)),
 }
 
 #[derive(Debug)]
 pub struct Entry {
-    data: Bytes,
-    expiration: Option<Instant>,
-    nounce: u64,
+    pub data: Frame,
+    pub expiration: Option<Instant>,
+    pub nounce: u64,
 }
 
 #[derive(Debug)]
@@ -35,6 +30,7 @@ pub struct DB {
     pub expiration: BTreeMap<(Instant, u64), Bytes>,
     pub when: Option<Instant>,
     pub id: usize,
+    pub counter: u64,
 }
 
 impl DB {
@@ -44,60 +40,60 @@ impl DB {
             expiration: BTreeMap::new(),
             when: None,
             id,
+            counter: 0,
         }
     }
 
-    pub fn get(&self, key: &Bytes) -> Option<Bytes> {
+    pub fn get(&self, key: &Bytes) -> Frame {
         self.database
             .get(key)
             .filter(|v| v.expiration.is_none() || v.expiration.unwrap() > Instant::now())
-            .map(|v| v.data.clone())
+            .map_or_else(|| Frame::NullString, |v| v.data.clone())
     }
 
-    pub fn debug(&self, key: &DebugCommand) -> DBReturn {
+    pub fn diagnose(&self, key: &DxCommand) -> Frame {
         match key {
-            DebugCommand::KeyNum => {
-                return DBReturn::Single(Some(Bytes::from(format!(
-                    "[{}]{}",
-                    self.id,
-                    self.database.len()
-                ))));
+            DxCommand::KeyNum => {
+                return Bytes::from(format!("[{}]{}", self.id, self.database.len())).into();
             }
-            DebugCommand::TotalKeyLen => {
-                return DBReturn::Single(Some(Bytes::from(format!(
+            DxCommand::TotalKeyLen => {
+                return Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.keys().fold(0, |res, b| res + b.len())
-                ))));
+                ))
+                .into();
             }
-            DebugCommand::TotalValLen => {
-                return DBReturn::Single(Some(Bytes::from(format!(
+            DxCommand::TotalValLen => {
+                return Bytes::from(format!(
                     "[{}]{}",
                     self.id,
                     self.database.values().fold(0, |res, b| res + b.data.len())
-                ))));
+                ))
+                .into();
             }
-            DebugCommand::RandomKeys => {
+            DxCommand::RandomKeys => {
                 const TAKE: usize = 5;
                 let mut idxs: Vec<usize> = (0..self.database.len()).collect();
                 idxs.shuffle(&mut thread_rng());
-                let mut rand_idx = idxs[..TAKE].to_vec();
+                let mut rand_idx = idxs[..min(TAKE, idxs.len())].to_vec();
                 rand_idx.sort();
-                let mut res = Vec::with_capacity(TAKE);
+                let mut res = Vec::with_capacity(TAKE + 1);
+                res.push(Bytes::copy_from_slice(format!("db {}", self.id).as_bytes()).into());
                 for (idx, key) in self.database.keys().enumerate() {
-                    if idx == rand_idx[res.len()] {
-                        res.push(Some(key.clone()));
+                    if idx == rand_idx[res.len() - 1] {
+                        res.push(key.clone().into());
                     }
                     if res.len() == TAKE {
                         break;
                     }
                 }
-                return DBReturn::List(res);
+                return Frame::Arrays(res);
             }
         }
     }
 
-    pub fn set(&mut self, key: Bytes, data: Bytes, nounce: u64, expiration: Option<Instant>) {
+    pub fn set(&mut self, key: Bytes, data: Frame, nounce: u64, expiration: Option<Instant>) {
         self.database.insert(
             key,
             Entry {
@@ -132,7 +128,7 @@ pub async fn database_manager(
                     continue;
                 }
                 let (cmd, ret_tx) = match res.unwrap() {
-                    TaskParam::Task(v) => v,
+                    TaskParam::OneshotTask(v) => v,
                 };
                 trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
                 let _ = ret_tx.send(cmd.exec(&mut db));

@@ -1,31 +1,124 @@
+pub mod command_parser;
+pub mod diagnose;
 pub mod get;
-use std::vec::IntoIter;
-
-use anyhow::{Error, Result};
-
-use get::*;
+pub mod incr;
+pub mod mget;
+pub mod mset;
 pub mod set;
-use crate::{db::DB, protocol::Frame, utils::get_integer};
+
+use command_parser::*;
+use diagnose::*;
+use get::*;
+use incr::*;
+use mget::*;
+use mset::*;
 use set::*;
 
-pub mod debug;
+use anyhow::{Error, Result};
+use utils::rolling_hash_const;
+use std::slice::Iter;
+
+use crate::{db::DB, protocol::Frame, utils};
+
 use bytes::*;
-use debug::*;
 use enum_dispatch::*;
+
+#[allow(dead_code)]
+pub enum Command {
+    Oneshot(OneshotCommand),
+    Traverse(TraverseCommand),
+    HoldOn(HoldOnCommand),
+}
 
 #[enum_dispatch]
 #[derive(Debug, Clone)]
-pub enum Command {
+pub enum OneshotCommand {
     Get,
     Set,
-    Debug,
+    MGet,
+    MSet,
+    Dx,
+    Incr,
 }
 
-#[enum_dispatch(Command)]
-pub trait ExecDB {
-    fn exec(&self, db: &mut DB) -> Frame;
-    fn get_key(&self) -> &Bytes;
-    fn set_nounce(&mut self, nounce: u64);
+#[enum_dispatch(OneshotCommand)]
+pub trait OneshotExecDB {
+    fn exec(self, db: &mut DB) -> Frame;
+    fn get_key(&self) -> &[u8];
+}
+
+#[enum_dispatch]
+#[derive(Debug, Clone)]
+pub enum TraverseCommand {
+    MSet(MSetDispatcher),
+    MGet(MGetDispatcher),
+    Dx(DxDispatcher),
+}
+
+#[enum_dispatch]
+#[derive(Debug, Clone)]
+pub enum MiniCommand {
+    Pair(_Pair),
+    Single(_Single),
+}
+
+#[enum_dispatch(MiniCommand)]
+pub trait MiniCommandTrait {
+    fn get_key(&self) -> &[u8];
+}
+
+pub type _Pair = (Bytes, Frame);
+
+impl MiniCommandTrait for _Pair {
+    fn get_key(&self) -> &[u8] {
+        return self.0.as_ref();
+    }
+}
+
+pub type _Single = Bytes;
+
+impl MiniCommandTrait for _Single {
+    fn get_key(&self) -> &[u8] {
+        return self.as_ref();
+    }
+}
+
+type IDCommandPair = (usize, Option<(OneshotCommand, MergeStrategy)>);
+
+#[enum_dispatch(TraverseCommand)]
+pub trait TraverseExecDB {
+    fn len(&self) -> usize;
+    fn next_command(&mut self) -> IDCommandPair;
+    fn iter_data(&self) -> Iter<MiniCommand>;
+    fn move_last_to(&mut self, db_id: usize, original_idx: usize);
+    fn init_tbls(&mut self, vec: &Vec<usize>);
+    fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
+        let mut tbl_len = vec![0; db_amount];
+        let db_ids: Vec<usize> = self
+            .iter_data()
+            .map(|v| {
+                let id = dispatch_fn(v.get_key());
+                tbl_len[id] += 1 as usize;
+                id
+            })
+            .collect();
+
+        self.init_tbls(&tbl_len);
+
+        let mut order = db_ids.len();
+        for _ in 0..db_ids.len() {
+            order -= 1;
+            self.move_last_to(db_ids[order], order);
+        }
+    }
+}
+
+pub enum HoldOnCommand {}
+
+pub enum MergeStrategy {
+    Reorder(Vec<usize>),
+    Drop,
+    Insert(usize),
 }
 
 #[derive(Debug, err_derive::Error)]
@@ -49,6 +142,8 @@ pub enum CommandError {
     NotImplemented,
     #[error(display = "InvalidOperand")]
     InvalidOperand,
+    #[error(display = "InvalidOperation")]
+    InvalidOperation,
 }
 
 fn missing_operand() -> Error {
@@ -59,53 +154,39 @@ fn missing_operation() -> Error {
     Error::new(CommandError::MissingOperation)
 }
 
-pub struct CommandParser {
-    frames: IntoIter<Frame>,
+fn rolling_hash(arr: &[u8]) -> Result<usize> {
+    let mut res = 0;
+    for &b in arr {
+        if b <= b'z' && b >= b'a' {
+            res = (res * 26 + (b - b'a') as usize) % utils::PRIME;
+        } else if b <= b'Z' && b >= b'A' {
+            res = (res * 26 + (b - b'A') as usize) % utils::PRIME;
+        } else {
+            return Err(Error::new(CommandError::InvalidOperation));
+        }
+    }
+    Ok(res)
 }
 
-impl CommandParser {
-    fn new(frame: Frame) -> Result<CommandParser> {
-        match frame {
-            Frame::Arrays(arr) => Ok(Self {
-                frames: arr.val.into_iter(),
-            }),
-            _ => Err(Error::new(ParseError::NotArray)),
-        }
-    }
-
-    fn next(&mut self) -> Option<Frame> {
-        self.frames.next()
-    }
-
-    fn next_bytes(&mut self) -> Result<Option<Bytes>> {
-        let next_frame = match self.next() {
-            Some(x) => x,
-            None => {
-                return Ok(None);
-            }
-        };
-        match next_frame {
-            Frame::SimpleString(s) | Frame::BulkStrings(s) => Ok(Some(s)),
-            _ => Err(Error::new(ParseError::NotString)),
-        }
-    }
-
-    fn next_integer(&mut self) -> Result<Option<i64>> {
-        match self.next_bytes()? {
-            Some(v) => get_integer(&v).map(|v| Some(v)),
-            None => Ok(None),
-        }
-    }
-}
+const GET: usize = rolling_hash_const(b"get");
+const SET: usize = rolling_hash_const(b"set");
+const MSET: usize = rolling_hash_const(b"mset");
+const MGET: usize = rolling_hash_const(b"mget");
+const INCR: usize = rolling_hash_const(b"incr");
+const DX: usize = rolling_hash_const(b"dx");
 
 impl Command {
     pub fn new(frame: Frame) -> Result<Self> {
         let mut parser = CommandParser::new(frame)?;
         let cmd_string = parser.next_bytes()?.ok_or_else(missing_operation)?;
-        match &cmd_string.to_ascii_lowercase()[..] {
-            b"get" => Ok(Get::new(&mut parser)?.into()),
-            b"set" => Ok(Set::new(&mut parser)?.into()),
-            b"debug" => Ok(Debug::new(&mut parser)?.into()),
+        #[deny(unreachable_patterns)]
+        match rolling_hash(cmd_string.as_ref())? {
+            GET => Ok(Command::Oneshot(Get::new(&mut parser)?.into())),
+            SET => Ok(Command::Oneshot(Set::new(&mut parser)?.into())),
+            MSET => Ok(Command::Traverse(MSetDispatcher::new(&mut parser)?.into())),
+            MGET => Ok(Command::Traverse(MGetDispatcher::new(&mut parser)?.into())),
+            INCR => Ok(Command::Oneshot(Incr::new(&mut parser)?.into())),
+            DX => Ok(Command::Traverse(DxDispatcher::new(&mut parser)?.into())),
             _ => Err(Error::new(CommandError::NotImplemented)),
         }
     }

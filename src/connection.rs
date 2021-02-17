@@ -68,15 +68,9 @@ impl Connection {
 
     pub async fn write_frame(&mut self, frame: &Frame) -> Result<()> {
         let x = match frame {
-            Frame::NullString => {
-                Some(NIL_STRING_FRAME)
-            }
-            Frame::Ok => {
-                Some(OK_FRAME)
-            }
-            Frame::NullArray => {
-                Some(NIL_ARRAY_FRAME)
-            }
+            Frame::NullString => Some(NIL_STRING_FRAME),
+            Frame::Ok => Some(OK_FRAME),
+            Frame::NullArray => Some(NIL_ARRAY_FRAME),
             _ => None,
         };
         if x.is_some() {
@@ -89,9 +83,7 @@ impl Connection {
         }
         let frame_byte_arr = encode::encode(frame)?;
         debug!("<{}>encoded frame_byte: {:?}", self.id, frame_byte_arr);
-        if frame_byte_arr.len() == 1 {
-            
-        }
+        if frame_byte_arr.len() == 1 {}
         let mut bufs = Vec::with_capacity(frame_byte_arr.len());
         for frame_byte in frame_byte_arr.iter() {
             bufs.push(IoSlice::new(&frame_byte[..]));

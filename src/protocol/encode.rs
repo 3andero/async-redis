@@ -8,7 +8,7 @@ struct EfficientBuffer {
 impl EfficientBuffer {
     fn new(frame: &Frame) -> Self {
         Self {
-            hot_buf: BytesMut::with_capacity(frame.raw_bytes_len() - frame.msg_len()),
+            hot_buf: BytesMut::with_capacity(frame.raw_bytes_len() - frame.encode_msg_len()),
             fragments: Vec::with_capacity(frame.msg_num() * 2 + 1),
         }
     }
@@ -72,9 +72,9 @@ fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
         }
         Frame::Arrays(arr) => {
             buf.put_u8(ARRAY_MARK);
-            buf.put_slice(&integer_to_bytes(arr.val.len())[..]);
+            buf.put_slice(&integer_to_bytes(arr.len())[..]);
             buf.put_slice(DLEM_MARK);
-            for f in &arr.val {
+            for f in arr {
                 encode_iter(&f, buf);
             }
         }
