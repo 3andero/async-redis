@@ -153,13 +153,7 @@ impl IntermediateToken {
                     if maybe_len == 0 {
                         self.is_complete = true;
                     }
-                    self.data = Some(Frame::Arrays(FrameArrays {
-                        val: Vec::with_capacity(maybe_len as usize),
-                        _raw_bytes_length: 0,
-                        _msg_length: 0,
-                        _msg_num: 0,
-                        _initialized: false,
-                    }));
+                    self.data = Some(Frame::Arrays(Vec::with_capacity(maybe_len as usize)));
                 }
             }
             _ => {
@@ -174,7 +168,7 @@ impl IntermediateToken {
         // println!("consume token: {:?}", &token);
         let token = token.into_frame()?;
         match (self.token_type, self.data.as_mut(), self.expected_len) {
-            (ARRAY_MARK, Some(Frame::Arrays(FrameArrays { val, .. })), Some(len)) => {
+            (ARRAY_MARK, Some(Frame::Arrays(val)), Some(len)) => {
                 if val.len() < len {
                     val.push(token);
                 }
@@ -190,11 +184,7 @@ impl IntermediateToken {
         Ok(())
     }
 
-    pub fn into_frame(mut self) -> FrameResult<Frame> {
-        match &mut self.data {
-            Some(Frame::Arrays(v)) => v.init_for_encoding(),
-            _ => (),
-        }
+    pub fn into_frame(self) -> FrameResult<Frame> {
         return self
             .data
             .ok_or_else(|| FrameError::Invalid(String::from("[3]")));

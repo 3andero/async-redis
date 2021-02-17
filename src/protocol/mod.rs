@@ -17,45 +17,16 @@ pub struct FrameArrays {
     _initialized: bool,
 }
 
-impl FrameArrays {
-    pub fn new(val: Vec<Frame>) -> Self {
-        let (_raw_bytes_length, _msg_length, _msg_num) =
-            val.iter().fold((0, 0, 0), |(a, b, c), f| {
-                (a + f.raw_bytes_len(), b + f.msg_len(), c + f.msg_num())
-            });
-        Self {
-            _raw_bytes_length: _raw_bytes_length + 3 + len_of(val.len()),
-            _msg_length,
-            _msg_num,
-            val,
-            _initialized: true,
-        }
-    }
+const SMALL_BYTES_THRESHOLD: usize = 64;
 
-    pub fn init_for_encoding(&mut self) {
-        if self._initialized {
-            return;
-        }
-        let (_raw_bytes_length, _msg_length, _msg_num) =
-            self.val.iter().fold((0, 0, 0), |(a, b, c), f| {
-                (a + f.raw_bytes_len(), b + f.msg_len(), c + f.msg_num())
-            });
-
-        self._raw_bytes_length = _raw_bytes_length + 3 + len_of(self.val.len());
-        self._msg_length = _msg_length;
-        self._msg_num = _msg_num;
-        self._initialized = true;
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Frame {
     SimpleString(Bytes),
     Errors(Bytes),
     Integers(i64),
     BulkStrings(Bytes),
     NullString,
-    Arrays(FrameArrays),
+    Arrays(Vec<Frame>),
     Ok,
     NullArray,
 }
@@ -75,7 +46,13 @@ impl From<Option<Bytes>> for Frame {
 impl From<Vec<Option<Bytes>>> for Frame {
     fn from(arr: Vec<Option<Bytes>>) -> Frame {
         let x = arr.into_iter().map(|x| x.into()).collect();
-        Frame::Arrays(FrameArrays::new(x))
+        Frame::Arrays(x)
+    }
+}
+
+impl From<Vec<Frame>> for Frame {
+    fn from(arr: Vec<Frame>) -> Frame {
+        Frame::Arrays(arr)
     }
 }
 
@@ -86,29 +63,46 @@ impl Frame {
             Frame::SimpleString(v) | Frame::Errors(v) => v.len() + 3,
             Frame::BulkStrings(v) => 5 + v.len() + len_of(v.len()),
             &Frame::Integers(v) => len_of(v) + 3,
-            Frame::Arrays(v) => v._raw_bytes_length,
+            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.raw_bytes_len()),
         }
     }
 
-    fn msg_len(&self) -> usize {
+    fn encode_msg_len(&self) -> usize {
         match self {
             Frame::Ok | Frame::NullString | Frame::NullArray => 5,
-            Frame::SimpleString(v) | Frame::Errors(v) | Frame::BulkStrings(v) => v.len(),
-            Frame::Arrays(v) => v._msg_length,
-            _ => 0,
+            Frame::SimpleString(v) | Frame::Errors(v) | Frame::BulkStrings(v) => {
+                if v.len() > SMALL_BYTES_THRESHOLD {
+                    v.len()
+                } else {
+                    0
+                }
+            }
+            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.encode_msg_len()),
+            Frame::Integers(_) => 0,
         }
     }
 
     fn msg_num(&self) -> usize {
         match self {
-            Frame::Ok
-            | Frame::NullString
-            | Frame::NullArray
-            | Frame::SimpleString(_)
-            | Frame::Errors(_)
-            | Frame::BulkStrings(_) => 1,
-            Frame::Arrays(v) => v._msg_num,
-            _ => 0,
+            Frame::Ok | Frame::NullString | Frame::NullArray => 0,
+            Frame::SimpleString(b) | Frame::Errors(b) | Frame::BulkStrings(b) => {
+                if b.len() > SMALL_BYTES_THRESHOLD {
+                    1
+                } else {
+                    0
+                }
+            }
+            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.msg_num()),
+            Frame::Integers(_) => 0,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Frame::Ok | Frame::NullString | Frame::NullArray => 0,
+            Frame::SimpleString(b) | Frame::Errors(b) | Frame::BulkStrings(b) => b.len(),
+            Frame::Arrays(v) => v.len(),
+            Frame::Integers(_) => 0,
         }
     }
 }
@@ -139,9 +133,9 @@ impl From<&str> for FrameError {
 
 type FrameResult<T> = std::result::Result<T, FrameError>;
 
-const NIL_STRING_FRAME: &'static [u8] = b"$-1\r\n";
-const NIL_ARRAY_FRAME: &'static [u8] = b"*-1\r\n";
-const OK_FRAME: &'static [u8] = b"+OK\r\n";
+pub const NIL_STRING_FRAME: &'static [u8] = b"$-1\r\n";
+pub const NIL_ARRAY_FRAME: &'static [u8] = b"*-1\r\n";
+pub const OK_FRAME: &'static [u8] = b"+OK\r\n";
 const SIMPLE_STRING_MARK: u8 = b'+';
 const ERROR_MARK: u8 = b'-';
 const BULK_STRING_MARK: u8 = b'$';
@@ -173,13 +167,13 @@ macro_rules! FrameTests {
         let mut params = vec![$($cmd,)*];
         let mut buf = reusable_buf::ReusableBuf::new();
         for param in params.iter_mut() {
+            buf.reset();
             buf.reserve(param.len());
             buf.put_slice(&param.as_bytes());
             let mut parser = decode::IntermediateParser::new();
             let (res, err_msg) = match parser.parse(&mut buf) {
                 Ok(v) => (v, String::from("")),
                 Err(e) => {
-                    buf.reset();
                     (Frame::NullString, format!("{:?}", e))
                 }
             };

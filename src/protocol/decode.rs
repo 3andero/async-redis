@@ -95,7 +95,7 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
                 for _ in 0..len as usize {
                     frame_arr.push(decode(buf)?)
                 }
-                Frame::Arrays(FrameArrays::new(frame_arr))
+                Frame::Arrays(frame_arr)
             };
             Ok(res)
         }
