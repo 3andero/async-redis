@@ -34,8 +34,8 @@ pub struct DB {
 
 #[derive(Debug)]
 pub struct ExpirationSubModule {
-    pub expiration: BTreeMap<(Instant, u64), Bytes>,
-    pub when: Option<Instant>,
+    expiration: BTreeMap<(Instant, u64), Bytes>,
+    when: Option<Instant>,
 }
 
 impl ExpirationSubModule {
@@ -66,13 +66,6 @@ impl DB {
             id,
             counter: 0,
         }
-    }
-
-    pub fn get(&self, key: &Bytes) -> Frame {
-        self.database
-            .get(key)
-            .filter(|v| v.expiration.is_none() || v.expiration.unwrap() > Instant::now())
-            .map_or_else(|| Frame::NullString, |v| v.data.clone())
     }
 
     pub fn diagnose(&self, key: &DxCommand) -> Frame {

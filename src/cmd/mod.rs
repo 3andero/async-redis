@@ -173,6 +173,8 @@ fn rolling_hash(arr: &[u8]) -> Result<usize> {
 }
 
 const GET: usize = rolling_hash_const(b"get");
+const TTL: usize = rolling_hash_const(b"ttl");
+const PTTL: usize = rolling_hash_const(b"pttl");
 const SET: usize = rolling_hash_const(b"set");
 const SETEX: usize = rolling_hash_const(b"setex");
 const PSETEX: usize = rolling_hash_const(b"psetex");
@@ -189,7 +191,15 @@ impl Command {
         let cmd_string = parser.next_bytes()?.ok_or_else(missing_operation)?;
         #[deny(unreachable_patterns)]
         match rolling_hash(cmd_string.as_ref())? {
-            GET => Ok(Command::Oneshot(Get::new(&mut parser)?.into())),
+            GET => Ok(Command::Oneshot(
+                Get::new(&mut parser, GetVariant::Get)?.into(),
+            )),
+            TTL => Ok(Command::Oneshot(
+                Get::new(&mut parser, GetVariant::TTL)?.into(),
+            )),
+            PTTL => Ok(Command::Oneshot(
+                Get::new(&mut parser, GetVariant::PTTL)?.into(),
+            )),
             SET => Ok(Command::Oneshot(
                 Set::new(&mut parser, SetVariant::Set)?.into(),
             )),

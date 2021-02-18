@@ -280,7 +280,7 @@ impl DB {
         );
     }
 
-    pub fn set(
+    fn set(
         &mut self,
         load_behaviour: &LoadBehavior,
         keep_ttl: bool,

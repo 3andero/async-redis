@@ -40,7 +40,14 @@ where
 {
     let size = len_of(num);
     let mut res = vec![0u8; size];
-    for i in (0..size).rev() {
+    let start = if num < T::zero() {
+        res[0] = b'-';
+        num = T::zero() - num;
+        1
+    } else {
+        0
+    };
+    for i in (start..size).rev() {
         res[i] = b'0' + ToPrimitive::to_u8(&(num % FromPrimitive::from_u8(10).unwrap())).unwrap();
         num = num / FromPrimitive::from_u8(10).unwrap();
     }
