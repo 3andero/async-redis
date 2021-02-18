@@ -158,6 +158,10 @@ fn invalid_operand() -> Error {
     Error::new(CommandError::InvalidOperand)
 }
 
+fn invalid_operation() -> Error {
+    Error::new(CommandError::InvalidOperation)
+}
+
 fn rolling_hash(arr: &[u8]) -> Result<usize> {
     let mut res = 0;
     for &b in arr {
@@ -183,6 +187,9 @@ const GETSET: usize = rolling_hash_const(b"getset");
 const MSET: usize = rolling_hash_const(b"mset");
 const MGET: usize = rolling_hash_const(b"mget");
 const INCR: usize = rolling_hash_const(b"incr");
+const DECR: usize = rolling_hash_const(b"decr");
+const INCRBY: usize = rolling_hash_const(b"incrby");
+const DECRBY: usize = rolling_hash_const(b"decrby");
 const DX: usize = rolling_hash_const(b"dx");
 const SHUTDOWN: usize = rolling_hash_const(b"shutdown");
 
@@ -218,7 +225,18 @@ impl Command {
             )),
             MSET => Ok(Command::Traverse(MSetDispatcher::new(&mut parser)?.into())),
             MGET => Ok(Command::Traverse(MGetDispatcher::new(&mut parser)?.into())),
-            INCR => Ok(Command::Oneshot(Incr::new(&mut parser)?.into())),
+            INCR => Ok(Command::Oneshot(
+                Incr::new(&mut parser, IncrVariant::Incr)?.into(),
+            )),
+            DECR => Ok(Command::Oneshot(
+                Incr::new(&mut parser, IncrVariant::Decr)?.into(),
+            )),
+            INCRBY => Ok(Command::Oneshot(
+                Incr::new(&mut parser, IncrVariant::IncrBy)?.into(),
+            )),
+            DECRBY => Ok(Command::Oneshot(
+                Incr::new(&mut parser, IncrVariant::DecrBy)?.into(),
+            )),
             DX => Ok(Command::Traverse(DxDispatcher::new(&mut parser)?.into())),
             SHUTDOWN => Ok(Command::Oneshot(Dx::new(DxCommand::Shutdown).into())),
             _ => Err(Error::new(CommandError::NotImplemented)),
