@@ -40,10 +40,18 @@ impl Dispatcher {
         }
 
         for (id, rx) in tasks_rx.drain(..).enumerate() {
-            let notify_copy = notify_tx.subscribe();
+            let notify_rx = notify_tx.subscribe();
+            let notify_tx_clone = notify_tx.clone();
             let shutdown_complete_tx_copy = shutdown_complete_tx.clone();
             spawn(async move {
-                database_manager(rx, notify_copy, shutdown_complete_tx_copy, id).await;
+                database_manager(
+                    rx,
+                    notify_tx_clone,
+                    notify_rx,
+                    shutdown_complete_tx_copy,
+                    id,
+                )
+                .await;
             });
         }
         Self {
@@ -72,7 +80,7 @@ pub struct Listener {
     listener: TcpListener,
     dispatcher: Arc<Dispatcher>,
 
-    shutdown_begin: broadcast::Sender<()>,
+    shutdown_begin_tx: broadcast::Sender<()>,
 
     shutdown_complete_rx: mpsc::Receiver<()>,
     shutdown_complete_tx: mpsc::Sender<()>,
@@ -122,7 +130,7 @@ impl Listener {
                 Handler {
                     connection: conn,
                     dispatcher: self.dispatcher.clone(),
-                    shutdown_begin: Shutdown::new(self.shutdown_begin.subscribe()),
+                    shutdown_begin: Shutdown::new(self.shutdown_begin_tx.subscribe()),
                     shutdown_complete_tx: self.shutdown_complete_tx.clone(),
                     id: float_num,
                 }
@@ -282,7 +290,7 @@ impl Handler {
 // #[instrument(skip(listener, shutdown_signal))]
 pub async fn run(listener: TcpListener, shutdown_signal: impl Future, num_threads: usize) {
     info!("Service Starting");
-    let (shutdown_begin_tx, _) = broadcast::channel(1);
+    let (shutdown_begin_tx, mut shutdown_begin_rx) = broadcast::channel(1);
 
     let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
 
@@ -293,7 +301,7 @@ pub async fn run(listener: TcpListener, shutdown_signal: impl Future, num_thread
             &shutdown_complete_tx,
             num_threads,
         )),
-        shutdown_begin: shutdown_begin_tx,
+        shutdown_begin_tx,
         shutdown_complete_rx,
         shutdown_complete_tx,
     };
@@ -310,16 +318,20 @@ pub async fn run(listener: TcpListener, shutdown_signal: impl Future, num_thread
         _ = shutdown_signal => {
             info!("Ctrl+C");
         }
+        _ = shutdown_begin_rx.recv() => {
+            drop(shutdown_begin_rx);
+            info!("shutdown by command");
+        }
     }
 
     let Listener {
-        shutdown_begin,
+        shutdown_begin_tx,
         mut shutdown_complete_rx,
         shutdown_complete_tx,
         ..
     } = server;
 
-    drop(shutdown_begin);
+    let _ = shutdown_begin_tx.send(());
 
     drop(shutdown_complete_tx);
 

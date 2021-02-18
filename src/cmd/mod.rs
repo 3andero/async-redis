@@ -184,6 +184,7 @@ const MSET: usize = rolling_hash_const(b"mset");
 const MGET: usize = rolling_hash_const(b"mget");
 const INCR: usize = rolling_hash_const(b"incr");
 const DX: usize = rolling_hash_const(b"dx");
+const SHUTDOWN: usize = rolling_hash_const(b"shutdown");
 
 impl Command {
     pub fn new(frame: Frame) -> Result<Self> {
@@ -219,6 +220,7 @@ impl Command {
             MGET => Ok(Command::Traverse(MGetDispatcher::new(&mut parser)?.into())),
             INCR => Ok(Command::Oneshot(Incr::new(&mut parser)?.into())),
             DX => Ok(Command::Traverse(DxDispatcher::new(&mut parser)?.into())),
+            SHUTDOWN => Ok(Command::Oneshot(Dx::new(DxCommand::Shutdown).into())),
             _ => Err(Error::new(CommandError::NotImplemented)),
         }
     }

@@ -30,6 +30,7 @@ pub struct DB {
     pub expiration: ExpirationSubModule,
     pub id: usize,
     pub counter: u64,
+    pub shutdown_tx: broadcast::Sender<()>,
 }
 
 #[derive(Debug)]
@@ -56,7 +57,7 @@ impl ExpirationSubModule {
 }
 
 impl DB {
-    fn new(id: usize) -> Self {
+    fn new(id: usize, shutdown_tx: broadcast::Sender<()>) -> Self {
         Self {
             database: FxHashMap::default(),
             expiration: ExpirationSubModule {
@@ -65,6 +66,7 @@ impl DB {
             },
             id,
             counter: 0,
+            shutdown_tx,
         }
     }
 
@@ -107,25 +109,30 @@ impl DB {
                 }
                 return Frame::Arrays(res);
             }
+            DxCommand::Shutdown => {
+                let _ = self.shutdown_tx.send(());
+                return Frame::Ok;
+            }
         }
     }
 }
 
 pub async fn database_manager(
     mut tasks_rx: mpsc::UnboundedReceiver<TaskParam>,
-    mut shutdown: broadcast::Receiver<()>,
+    shutdown_tx: broadcast::Sender<()>,
+    mut shutdown_rx: broadcast::Receiver<()>,
     _shutdown_complete_tx: mpsc::Sender<()>,
     taskid: usize,
 ) {
     let mut when: Option<Instant> = None;
-    let mut db = DB::new(taskid);
+    let mut db = DB::new(taskid, shutdown_tx);
     info!("[{}] starting backgroud task", taskid);
 
     loop {
         let now = Instant::now();
 
         select! {
-            _ = shutdown.recv() => {
+            _ = shutdown_rx.recv() => {
                 info!("[{}] shutting down backgroud task", taskid);
                 return;
             }
