@@ -18,7 +18,7 @@ impl OneshotExecDB for MSet {
         db.counter += self.pairs.len() as u64;
         self.pairs.into_iter().fold(nounce0 + 1, |i, cmd| {
             if let MiniCommand::Pair((k, v)) = cmd {
-                db.set(k, v, i, None);
+                db.set_lite(k, v, i, None);
             }
             i + 1
         });

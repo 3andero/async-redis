@@ -32,7 +32,7 @@ impl DB {
             .filter(|v| v.expiration.is_none() || v.expiration.unwrap() > Instant::now())
             .map_or_else(
                 || Frame::NullString,
-                |en| match &en.data {
+                |en| match &mut en.data {
                     Frame::BulkStrings(b) => match get_integer(b) {
                         Ok(v) => {
                             en.data = Frame::Integers(v + 1);
@@ -42,9 +42,9 @@ impl DB {
                             return Frame::NullString;
                         }
                     },
-                    &Frame::Integers(i) => {
-                        en.data = Frame::Integers(i + 1);
-                        return Frame::Integers(i + 1);
+                    Frame::Integers(i) => {
+                        *i += 1;
+                        return Frame::Integers(*i + 1);
                     }
                     _ => {
                         return Frame::NullString;
