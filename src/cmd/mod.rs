@@ -15,8 +15,8 @@ use mset::*;
 use set::*;
 
 use anyhow::{Error, Result};
-use utils::rolling_hash_const;
 use std::slice::Iter;
+use utils::rolling_hash_const;
 
 use crate::{db::DB, protocol::Frame, utils};
 
@@ -154,6 +154,14 @@ fn missing_operation() -> Error {
     Error::new(CommandError::MissingOperation)
 }
 
+fn invalid_operand() -> Error {
+    Error::new(CommandError::InvalidOperand)
+}
+
+fn invalid_operation() -> Error {
+    Error::new(CommandError::InvalidOperation)
+}
+
 fn rolling_hash(arr: &[u8]) -> Result<usize> {
     let mut res = 0;
     for &b in arr {
@@ -169,11 +177,21 @@ fn rolling_hash(arr: &[u8]) -> Result<usize> {
 }
 
 const GET: usize = rolling_hash_const(b"get");
+const TTL: usize = rolling_hash_const(b"ttl");
+const PTTL: usize = rolling_hash_const(b"pttl");
 const SET: usize = rolling_hash_const(b"set");
+const SETEX: usize = rolling_hash_const(b"setex");
+const PSETEX: usize = rolling_hash_const(b"psetex");
+const SETNX: usize = rolling_hash_const(b"setnx");
+const GETSET: usize = rolling_hash_const(b"getset");
 const MSET: usize = rolling_hash_const(b"mset");
 const MGET: usize = rolling_hash_const(b"mget");
 const INCR: usize = rolling_hash_const(b"incr");
+const DECR: usize = rolling_hash_const(b"decr");
+const INCRBY: usize = rolling_hash_const(b"incrby");
+const DECRBY: usize = rolling_hash_const(b"decrby");
 const DX: usize = rolling_hash_const(b"dx");
+const SHUTDOWN: usize = rolling_hash_const(b"shutdown");
 
 impl Command {
     pub fn new(frame: Frame) -> Result<Self> {
@@ -181,12 +199,46 @@ impl Command {
         let cmd_string = parser.next_bytes()?.ok_or_else(missing_operation)?;
         #[deny(unreachable_patterns)]
         match rolling_hash(cmd_string.as_ref())? {
-            GET => Ok(Command::Oneshot(Get::new(&mut parser)?.into())),
-            SET => Ok(Command::Oneshot(Set::new(&mut parser)?.into())),
+            GET => Ok(Command::Oneshot(
+                Get::new(&mut parser, GetVariant::Get)?.into(),
+            )),
+            TTL => Ok(Command::Oneshot(
+                Get::new(&mut parser, GetVariant::TTL)?.into(),
+            )),
+            PTTL => Ok(Command::Oneshot(
+                Get::new(&mut parser, GetVariant::PTTL)?.into(),
+            )),
+            SET => Ok(Command::Oneshot(
+                Set::new(&mut parser, SetVariant::Set)?.into(),
+            )),
+            SETEX => Ok(Command::Oneshot(
+                Set::new(&mut parser, SetVariant::SetEX)?.into(),
+            )),
+            SETNX => Ok(Command::Oneshot(
+                Set::new(&mut parser, SetVariant::SetNX)?.into(),
+            )),
+            PSETEX => Ok(Command::Oneshot(
+                Set::new(&mut parser, SetVariant::PSetEX)?.into(),
+            )),
+            GETSET => Ok(Command::Oneshot(
+                Set::new(&mut parser, SetVariant::GetSet)?.into(),
+            )),
             MSET => Ok(Command::Traverse(MSetDispatcher::new(&mut parser)?.into())),
             MGET => Ok(Command::Traverse(MGetDispatcher::new(&mut parser)?.into())),
-            INCR => Ok(Command::Oneshot(Incr::new(&mut parser)?.into())),
+            INCR => Ok(Command::Oneshot(
+                Incr::new(&mut parser, IncrVariant::Incr)?.into(),
+            )),
+            DECR => Ok(Command::Oneshot(
+                Incr::new(&mut parser, IncrVariant::Decr)?.into(),
+            )),
+            INCRBY => Ok(Command::Oneshot(
+                Incr::new(&mut parser, IncrVariant::IncrBy)?.into(),
+            )),
+            DECRBY => Ok(Command::Oneshot(
+                Incr::new(&mut parser, IncrVariant::DecrBy)?.into(),
+            )),
             DX => Ok(Command::Traverse(DxDispatcher::new(&mut parser)?.into())),
+            SHUTDOWN => Ok(Command::Oneshot(Dx::new(DxCommand::Shutdown).into())),
             _ => Err(Error::new(CommandError::NotImplemented)),
         }
     }

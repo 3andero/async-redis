@@ -27,28 +27,47 @@ pub struct Entry {
 #[derive(Debug)]
 pub struct DB {
     pub database: FxHashMap<Bytes, Entry>,
-    pub expiration: BTreeMap<(Instant, u64), Bytes>,
-    pub when: Option<Instant>,
+    pub expiration: ExpirationSubModule,
     pub id: usize,
     pub counter: u64,
+    pub shutdown_tx: broadcast::Sender<()>,
+}
+
+#[derive(Debug)]
+pub struct ExpirationSubModule {
+    expiration: BTreeMap<(Instant, u64), Bytes>,
+    when: Option<Instant>,
+}
+
+impl ExpirationSubModule {
+    pub fn update(&mut self, expiration: Option<Instant>, nounce: u64, key: &Bytes) {
+        if expiration.is_none() {
+            return;
+        }
+        let expiration = expiration.unwrap();
+        self.expiration.insert((expiration, nounce), key.clone());
+        self.when = match self.when {
+            None => Some(expiration),
+            Some(v) => Some(v.min(expiration)),
+        };
+    }
+    pub fn remove(&mut self, key: &(Instant, u64)) {
+        self.expiration.remove(key);
+    }
 }
 
 impl DB {
-    fn new(id: usize) -> Self {
+    fn new(id: usize, shutdown_tx: broadcast::Sender<()>) -> Self {
         Self {
             database: FxHashMap::default(),
-            expiration: BTreeMap::new(),
-            when: None,
+            expiration: ExpirationSubModule {
+                expiration: BTreeMap::new(),
+                when: None,
+            },
             id,
             counter: 0,
+            shutdown_tx,
         }
-    }
-
-    pub fn get(&self, key: &Bytes) -> Frame {
-        self.database
-            .get(key)
-            .filter(|v| v.expiration.is_none() || v.expiration.unwrap() > Instant::now())
-            .map_or_else(|| Frame::NullString, |v| v.data.clone())
     }
 
     pub fn diagnose(&self, key: &DxCommand) -> Frame {
@@ -90,36 +109,30 @@ impl DB {
                 }
                 return Frame::Arrays(res);
             }
+            DxCommand::Shutdown => {
+                let _ = self.shutdown_tx.send(());
+                return Frame::Ok;
+            }
         }
-    }
-
-    pub fn set(&mut self, key: Bytes, data: Frame, nounce: u64, expiration: Option<Instant>) {
-        self.database.insert(
-            key,
-            Entry {
-                data,
-                expiration,
-                nounce,
-            },
-        );
     }
 }
 
 pub async fn database_manager(
     mut tasks_rx: mpsc::UnboundedReceiver<TaskParam>,
-    mut shutdown: broadcast::Receiver<()>,
+    shutdown_tx: broadcast::Sender<()>,
+    mut shutdown_rx: broadcast::Receiver<()>,
     _shutdown_complete_tx: mpsc::Sender<()>,
     taskid: usize,
 ) {
     let mut when: Option<Instant> = None;
-    let mut db = DB::new(taskid);
+    let mut db = DB::new(taskid, shutdown_tx);
     info!("[{}] starting backgroud task", taskid);
 
     loop {
         let now = Instant::now();
 
         select! {
-            _ = shutdown.recv() => {
+            _ = shutdown_rx.recv() => {
                 info!("[{}] shutting down backgroud task", taskid);
                 return;
             }
@@ -139,11 +152,11 @@ pub async fn database_manager(
             ) => {
                 debug!("[{}] task waked up, expirations: {:?}", taskid, db.expiration);
                 when = None;
-                if db.expiration.len() > 0 {
+                if db.expiration.expiration.len() > 0 {
                     let now = Instant::now();
-                    while let Some((&(expire_next, id), _)) = db.expiration.iter().next() {
+                    while let Some((&(expire_next, id), _)) = db.expiration.expiration.iter().next() {
                         if expire_next <= now {
-                            let key = db.expiration.remove(&(expire_next, id)).unwrap();
+                            let key = db.expiration.expiration.remove(&(expire_next, id)).unwrap();
                             db.database.remove(&key);
                             trace!("[{}] collecting expired key({:?}): {:?}", taskid, &now, &key);
                         } else {

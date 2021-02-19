@@ -14,6 +14,7 @@ pub enum DxCommand {
     TotalKeyLen,
     TotalValLen,
     RandomKeys,
+    Shutdown,
 }
 
 impl Dx {
