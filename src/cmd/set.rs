@@ -27,6 +27,7 @@ const I_PXAT: usize = 5;
 const I_KEEPTTL: usize = 6;
 const I_GET: usize = 7;
 
+#[derive(Debug, Clone, Copy)]
 pub enum SetVariant {
     Set,
     SetEX,
@@ -58,7 +59,6 @@ pub struct Set {
     get: bool,
 }
 
-// #[macro_export]
 macro_rules! check_set {
     ($checklist:expr, $to_set:expr, $($to_check:expr),*) => {
         if $checklist[$to_set] {
@@ -270,14 +270,21 @@ impl OneshotExecDB for Set {
 
 impl DB {
     pub fn set_lite(&mut self, key: Bytes, data: Frame, nounce: u64, expiration: Option<Instant>) {
-        self.database.insert(
+        match self.database.insert(
             key,
             Entry {
                 data,
                 expiration,
                 nounce,
             },
-        );
+        ) {
+            Some(en) => {
+                if en.expiration.is_some() {
+                    self.expiration.remove(&(en.expiration.unwrap(), en.nounce));
+                }
+            }
+            _ => (),
+        }
     }
 
     fn set(
@@ -294,6 +301,12 @@ impl DB {
             LoadBehavior::None => {
                 if keep_ttl {
                     if let Some(en) = self.database.get_mut(&key) {
+                        if en.expiration.is_some() && en.expiration.unwrap() < Instant::now() {
+                            self.expiration.remove(&(en.expiration.unwrap(), en.nounce));
+                            en.expiration = None;
+                            en.data = Frame::NullString;
+                            en.nounce = nounce;
+                        }
                         return if get {
                             std::mem::replace(&mut en.data, data)
                         } else {
@@ -355,7 +368,11 @@ impl DB {
                     return Frame::NullString;
                 }
             },
-            LoadBehavior::XX => match self.database.get_mut(&key) {
+            LoadBehavior::XX => match self
+                .database
+                .get_mut(&key)
+                .filter(|en| en.expiration.is_none() || en.expiration.unwrap() > Instant::now())
+            {
                 Some(en) => {
                     if !keep_ttl {
                         if en.expiration.is_some() {

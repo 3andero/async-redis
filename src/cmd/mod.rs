@@ -1,4 +1,5 @@
 pub mod command_parser;
+pub mod command_table;
 pub mod diagnose;
 pub mod get;
 pub mod incr;
@@ -7,6 +8,7 @@ pub mod mset;
 pub mod set;
 
 use command_parser::*;
+use command_table::*;
 use diagnose::*;
 use get::*;
 use incr::*;
@@ -176,70 +178,40 @@ fn rolling_hash(arr: &[u8]) -> Result<usize> {
     Ok(res)
 }
 
-const GET: usize = rolling_hash_const(b"get");
-const TTL: usize = rolling_hash_const(b"ttl");
-const PTTL: usize = rolling_hash_const(b"pttl");
-const SET: usize = rolling_hash_const(b"set");
-const SETEX: usize = rolling_hash_const(b"setex");
-const PSETEX: usize = rolling_hash_const(b"psetex");
-const SETNX: usize = rolling_hash_const(b"setnx");
-const GETSET: usize = rolling_hash_const(b"getset");
-const MSET: usize = rolling_hash_const(b"mset");
-const MGET: usize = rolling_hash_const(b"mget");
-const INCR: usize = rolling_hash_const(b"incr");
-const DECR: usize = rolling_hash_const(b"decr");
-const INCRBY: usize = rolling_hash_const(b"incrby");
-const DECRBY: usize = rolling_hash_const(b"decrby");
-const DX: usize = rolling_hash_const(b"dx");
-const SHUTDOWN: usize = rolling_hash_const(b"shutdown");
+fn binary_lookup(token: usize) -> CommandTable {
+    let (mut start, mut end) = (0, COMMAND_NUM);
+    let mut mi;
+    while start < end {
+        mi = (start + end) / 2;
+        if COMMAND_LOOKUP[mi].0 < token {
+            start = mi + 1;
+        } else {
+            end = mi;
+        }
+    }
+    if start == COMMAND_NUM {
+        return CommandTable::UNIMPLEMENTED;
+    }
+    if COMMAND_LOOKUP[start].0 != token {
+        return CommandTable::UNIMPLEMENTED;
+    } else {
+        return COMMAND_LOOKUP[start].1;
+    }
+}
 
 impl Command {
     pub fn new(frame: Frame) -> Result<Self> {
         let mut parser = CommandParser::new(frame)?;
         let cmd_string = parser.next_bytes()?.ok_or_else(missing_operation)?;
-        #[deny(unreachable_patterns)]
-        match rolling_hash(cmd_string.as_ref())? {
-            GET => Ok(Command::Oneshot(
-                Get::new(&mut parser, GetVariant::Get)?.into(),
-            )),
-            TTL => Ok(Command::Oneshot(
-                Get::new(&mut parser, GetVariant::TTL)?.into(),
-            )),
-            PTTL => Ok(Command::Oneshot(
-                Get::new(&mut parser, GetVariant::PTTL)?.into(),
-            )),
-            SET => Ok(Command::Oneshot(
-                Set::new(&mut parser, SetVariant::Set)?.into(),
-            )),
-            SETEX => Ok(Command::Oneshot(
-                Set::new(&mut parser, SetVariant::SetEX)?.into(),
-            )),
-            SETNX => Ok(Command::Oneshot(
-                Set::new(&mut parser, SetVariant::SetNX)?.into(),
-            )),
-            PSETEX => Ok(Command::Oneshot(
-                Set::new(&mut parser, SetVariant::PSetEX)?.into(),
-            )),
-            GETSET => Ok(Command::Oneshot(
-                Set::new(&mut parser, SetVariant::GetSet)?.into(),
-            )),
-            MSET => Ok(Command::Traverse(MSetDispatcher::new(&mut parser)?.into())),
-            MGET => Ok(Command::Traverse(MGetDispatcher::new(&mut parser)?.into())),
-            INCR => Ok(Command::Oneshot(
-                Incr::new(&mut parser, IncrVariant::Incr)?.into(),
-            )),
-            DECR => Ok(Command::Oneshot(
-                Incr::new(&mut parser, IncrVariant::Decr)?.into(),
-            )),
-            INCRBY => Ok(Command::Oneshot(
-                Incr::new(&mut parser, IncrVariant::IncrBy)?.into(),
-            )),
-            DECRBY => Ok(Command::Oneshot(
-                Incr::new(&mut parser, IncrVariant::DecrBy)?.into(),
-            )),
-            DX => Ok(Command::Traverse(DxDispatcher::new(&mut parser)?.into())),
-            SHUTDOWN => Ok(Command::Oneshot(Dx::new(DxCommand::Shutdown).into())),
-            _ => Err(Error::new(CommandError::NotImplemented)),
+        match binary_lookup(rolling_hash(cmd_string.as_ref())?) {
+            CommandTable::GET(v) => Ok(Command::Oneshot(Get::new(&mut parser, v)?.into())),
+            CommandTable::SET(v) => Ok(Command::Oneshot(Set::new(&mut parser, v)?.into())),
+            CommandTable::MSET => Ok(Command::Traverse(MSetDispatcher::new(&mut parser)?.into())),
+            CommandTable::MGET => Ok(Command::Traverse(MGetDispatcher::new(&mut parser)?.into())),
+            CommandTable::INCR(v) => Ok(Command::Oneshot(Incr::new(&mut parser, v)?.into())),
+            CommandTable::DX => Ok(Command::Traverse(DxDispatcher::new(&mut parser)?.into())),
+            CommandTable::SHUTDOWN => Ok(Command::Oneshot(Dx::new(DxCommand::Shutdown).into())),
+            CommandTable::UNIMPLEMENTED => Err(Error::new(CommandError::NotImplemented)),
         }
     }
 }

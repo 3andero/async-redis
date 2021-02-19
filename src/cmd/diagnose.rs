@@ -8,7 +8,7 @@ pub struct Dx {
     key: DxCommand,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum DxCommand {
     KeyNum,
     TotalKeyLen,
