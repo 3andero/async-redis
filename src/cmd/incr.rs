@@ -8,6 +8,7 @@ pub struct Incr {
     by: i64,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum IncrVariant {
     Incr,
     IncrBy,

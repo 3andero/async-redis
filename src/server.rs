@@ -6,6 +6,8 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::Error;
+
 use tokio::{net::TcpListener, spawn, sync::*};
 use tracing::*;
 
@@ -228,13 +230,13 @@ impl Handler {
                                 drop(ret_rx);
                             }
                             MergeStrategy::Insert(idx) => {
-                                let f = ret_rx.await.unwrap();
+                                let f = ret_rx.await.map_err(|e| Error::new(e))?;
                                 unsafe {
                                     ret.as_mut_ptr().add(idx).write(f);
                                 }
                             }
                             MergeStrategy::Reorder(order) => {
-                                if let Frame::Arrays(arr) = ret_rx.await.unwrap() {
+                                if let Frame::Arrays(arr) = ret_rx.await.map_err(|e| Error::new(e))? {
                                     for (f, o) in arr.into_iter().zip(order) {
                                         unsafe {
                                             ret.as_mut_ptr().add(o).write(f);
@@ -265,7 +267,7 @@ impl Handler {
 
                     self.dispatcher.tasks_tx[db_id].send(TaskParam::OneshotTask((cmd, ret_tx)))?;
 
-                    ret_rx.await.unwrap()
+                    ret_rx.await.map_err(|e| Error::new(e))?
                 }
                 Err(e) => match e.downcast_ref::<CommandError>() {
                     Some(e) => Frame::Errors(format!("{}", e).into()),

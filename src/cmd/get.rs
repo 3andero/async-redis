@@ -8,7 +8,7 @@ pub struct Get {
     variant: GetVariant,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum GetVariant {
     Get,
     TTL,
