@@ -11,7 +11,10 @@ use anyhow::Error;
 use tokio::{net::TcpListener, spawn, sync::*};
 use tracing::*;
 
-use crate::{cmd::*, connection::*, db::*, protocol::Frame, shutdown::Shutdown, Result};
+use crate::{
+    cmd::traverse_command::*, cmd::*, connection::*, db::*, protocol::Frame, shutdown::Shutdown,
+    Result,
+};
 
 #[allow(dead_code)]
 fn calculate_hash<T: Hash>(t: &T) -> usize {
@@ -215,38 +218,19 @@ impl Handler {
                         ret.set_len(expected_amount_ret);
                     }
 
+                    let mut result_collector = cmd.get_result_collector();
+
                     for _ in 0..thread_num {
-                        let (ret_tx, ret_rx) = oneshot::channel();
                         let (db_id, cmd_copy) = cmd.next_command();
                         if cmd_copy.is_none() {
                             continue;
                         }
-                        let (cmd_copy, merge_strategy) = cmd_copy.unwrap();
+                        let (ret_tx, ret_rx) = oneshot::channel();
+                        let cmd_copy = cmd_copy.unwrap();
                         self.dispatcher.tasks_tx[db_id]
                             .send(TaskParam::OneshotTask((cmd_copy, ret_tx)))?;
 
-                        match merge_strategy {
-                            MergeStrategy::Drop => {
-                                drop(ret_rx);
-                            }
-                            MergeStrategy::Insert(idx) => {
-                                let f = ret_rx.await.map_err(|e| Error::new(e))?;
-                                unsafe {
-                                    ret.as_mut_ptr().add(idx).write(f);
-                                }
-                            }
-                            MergeStrategy::Reorder(order) => {
-                                if let Frame::Arrays(arr) = ret_rx.await.map_err(|e| Error::new(e))? {
-                                    for (f, o) in arr.into_iter().zip(order) {
-                                        unsafe {
-                                            ret.as_mut_ptr().add(o).write(f);
-                                        }
-                                    }
-                                } else {
-                                    panic!("Only Frame::Array can be reordered.");
-                                }
-                            }
-                        }
+                        result_collector.merge(&mut ret, ret_rx).await?;
                     }
 
                     if ret.len() == 1 {

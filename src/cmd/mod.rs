@@ -6,6 +6,8 @@ pub mod incr;
 pub mod mget;
 pub mod mset;
 pub mod set;
+pub mod subscribe;
+pub mod traverse_command;
 
 use command_parser::*;
 use command_table::*;
@@ -15,9 +17,12 @@ use incr::*;
 use mget::*;
 use mset::*;
 use set::*;
+use subscribe::*;
+use traverse_command::*;
 
 use anyhow::{Error, Result};
 use std::slice::Iter;
+use tokio::sync::oneshot;
 use utils::rolling_hash_const;
 
 use crate::{db::DB, protocol::Frame, utils};
@@ -49,78 +54,55 @@ pub trait OneshotExecDB {
     fn get_key(&self) -> &[u8];
 }
 
-#[enum_dispatch]
-#[derive(Debug, Clone)]
-pub enum TraverseCommand {
-    MSet(MSetDispatcher),
-    MGet(MGetDispatcher),
-    Dx(DxDispatcher),
+#[enum_dispatch(DispatchToMultipleDB)]
+pub enum HoldOnCommand {
+    SendNReturn1,
 }
 
-#[enum_dispatch]
-#[derive(Debug, Clone)]
-pub enum MiniCommand {
-    Pair(_Pair),
-    Single(_Single),
+pub enum ResultCollector {
+    Reorder(Vec<Vec<usize>>),
+    KeepFirst(usize),
 }
 
-#[enum_dispatch(MiniCommand)]
-pub trait MiniCommandTrait {
-    fn get_key(&self) -> &[u8];
-}
-
-pub type _Pair = (Bytes, Frame);
-
-impl MiniCommandTrait for _Pair {
-    fn get_key(&self) -> &[u8] {
-        return self.0.as_ref();
-    }
-}
-
-pub type _Single = Bytes;
-
-impl MiniCommandTrait for _Single {
-    fn get_key(&self) -> &[u8] {
-        return self.as_ref();
-    }
-}
-
-type IDCommandPair = (usize, Option<(OneshotCommand, MergeStrategy)>);
-
-#[enum_dispatch(TraverseCommand)]
-pub trait TraverseExecDB {
-    fn len(&self) -> usize;
-    fn next_command(&mut self) -> IDCommandPair;
-    fn iter_data(&self) -> Iter<MiniCommand>;
-    fn move_last_to(&mut self, db_id: usize, original_idx: usize);
-    fn init_tbls(&mut self, vec: &Vec<usize>);
-    fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
-        let mut tbl_len = vec![0; db_amount];
-        let db_ids: Vec<usize> = self
-            .iter_data()
-            .map(|v| {
-                let id = dispatch_fn(v.get_key());
-                tbl_len[id] += 1 as usize;
-                id
-            })
-            .collect();
-
-        self.init_tbls(&tbl_len);
-
-        let mut order = db_ids.len();
-        for _ in 0..db_ids.len() {
-            order -= 1;
-            self.move_last_to(db_ids[order], order);
+impl ResultCollector {
+    pub async fn merge(
+        &mut self,
+        ret: &mut Vec<Frame>,
+        ret_rx: oneshot::Receiver<Frame>,
+    ) -> Result<()> {
+        match self {
+            ResultCollector::KeepFirst(x) => {
+                if *x == 0 {
+                    return Ok(());
+                }
+                let f = ret_rx.await.map_err(|e| Error::new(e))?;
+                unsafe {
+                    ret.as_mut_ptr().add(*x).write(f);
+                }
+                *x -= 1;
+                Ok(())
+            }
+            ResultCollector::Reorder(tbl) => {
+                while tbl.len() > 0 && tbl[tbl.len() - 1].len() == 0 {
+                    tbl.pop();
+                }
+                if tbl.len() == 0 {
+                    panic!("expecting something left");
+                }
+                let order = tbl.pop().unwrap();
+                if let Frame::Arrays(arr) = ret_rx.await.map_err(|e| Error::new(e))? {
+                    for (f, o) in arr.into_iter().zip(order) {
+                        unsafe {
+                            ret.as_mut_ptr().add(o).write(f);
+                        }
+                    }
+                } else {
+                    panic!("Only Frame::Array can be reordered.");
+                }
+                Ok(())
+            }
         }
     }
-}
-
-pub enum HoldOnCommand {}
-
-pub enum MergeStrategy {
-    Reorder(Vec<usize>),
-    Drop,
-    Insert(usize),
 }
 
 #[derive(Debug, err_derive::Error)]
@@ -203,15 +185,19 @@ impl Command {
     pub fn new(frame: Frame) -> Result<Self> {
         let mut parser = CommandParser::new(frame)?;
         let cmd_string = parser.next_bytes()?.ok_or_else(missing_operation)?;
+        use Command::*;
+        use CommandTable::*;
         match binary_lookup(rolling_hash(cmd_string.as_ref())?) {
-            CommandTable::GET(v) => Ok(Command::Oneshot(Get::new(&mut parser, v)?.into())),
-            CommandTable::SET(v) => Ok(Command::Oneshot(Set::new(&mut parser, v)?.into())),
-            CommandTable::MSET => Ok(Command::Traverse(MSetDispatcher::new(&mut parser)?.into())),
-            CommandTable::MGET => Ok(Command::Traverse(MGetDispatcher::new(&mut parser)?.into())),
-            CommandTable::INCR(v) => Ok(Command::Oneshot(Incr::new(&mut parser, v)?.into())),
-            CommandTable::DX => Ok(Command::Traverse(DxDispatcher::new(&mut parser)?.into())),
-            CommandTable::SHUTDOWN => Ok(Command::Oneshot(Dx::new(DxCommand::Shutdown).into())),
-            CommandTable::UNIMPLEMENTED => Err(Error::new(CommandError::NotImplemented)),
+            GET(v) => Ok(Oneshot(Get::new(&mut parser, v)?.into())),
+            SET(v) => Ok(Oneshot(Set::new(&mut parser, v)?.into())),
+            MSET => Ok(Traverse(SendNReturn1::new(&mut parser)?.into())),
+            MGET => Ok(Traverse(
+                SendNReturnN::new(&mut parser, TraverseVariant::MGet)?.into(),
+            )),
+            INCR(v) => Ok(Oneshot(Incr::new(&mut parser, v)?.into())),
+            DX => Ok(Traverse(DxDispatcher::new(&mut parser)?.into())),
+            SHUTDOWN => Ok(Oneshot(Dx::new(DxCommand::Shutdown).into())),
+            UNIMPLEMENTED => Err(Error::new(CommandError::NotImplemented)),
         }
     }
 }

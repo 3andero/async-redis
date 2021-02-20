@@ -39,19 +39,17 @@ pub struct DxDispatcher {
     db_amount: usize,
 }
 
-impl TraverseExecDB for DxDispatcher {
+impl DispatchToMultipleDB for DxDispatcher {
     fn next_command(&mut self) -> IDCommandPair {
         self.db_amount -= 1;
-        (
-            self.db_amount,
-            Some((
-                Dx::new(self.key.clone()).into(),
-                MergeStrategy::Insert(self.db_amount),
-            )),
-        )
+        (self.db_amount, Some(Dx::new(self.key.clone()).into()))
     }
 
     fn move_last_to(&mut self, _: usize, _: usize) {}
+
+    fn get_result_collector(&mut self) -> ResultCollector {
+        ResultCollector::KeepFirst(self.db_amount)
+    }
 
     fn iter_data(&self) -> Iter<MiniCommand> {
         unimplemented!()
