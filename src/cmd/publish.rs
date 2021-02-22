@@ -6,25 +6,23 @@ pub struct Publish {
     val: Frame,
 }
 
-impl OneshotExecDB for Publish {
-    fn exec(self, db: &mut DB) -> Frame {
+impl PubSubExecDB for Publish {}
+
+impl Publish {
+    async fn exec(self, db: &mut DB) -> Frame {
         if let Some(listeners) = db.subscription.get(&self.key) {
             let mut sent = 0;
             for &id in listeners {
                 if let Some(sender) = db.subscriber.get(&id) {
-                    sender.send(self.val.clone());
-                    sent += 1;
+                    if sender.send(self.val.clone()).await.is_ok() {
+                        sent += 1;
+                    }
                 }
             }
-
             Frame::Integers(sent)
         } else {
             Frame::Integers(0)
         }
-    }
-
-    fn get_key(&self) -> &[u8] {
-        self.key.as_ref()
     }
 }
 
@@ -46,7 +44,7 @@ impl DispatchToMultipleDB for PublishDispatcher {
         self.db_amount -= 1;
         (
             self.db_amount,
-            Some(Publish::new(self.key.clone(), self.val.clone()).into()),
+            AtomicCommand::PubSub(Publish::new(self.key.clone(), self.val.clone()).into()),
         )
     }
 

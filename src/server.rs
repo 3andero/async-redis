@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::Error;
 
+use bytes::Bytes;
 use tokio::{net::TcpListener, spawn, sync::*};
 use tracing::*;
 
@@ -15,6 +16,8 @@ use crate::{
     cmd::traverse_command::*, cmd::*, connection::*, db::*, protocol::Frame, shutdown::Shutdown,
     Result,
 };
+
+const BUFSIZE: usize = 50;
 
 #[allow(dead_code)]
 fn calculate_hash<T: Hash>(t: &T) -> usize {
@@ -182,7 +185,30 @@ struct Handler {
 
 impl Handler {
     // #[instrument(skip(self))]
+    fn prepare_traverse_send<T>(
+        &self,
+        cmd: &mut T,
+        thread_num: usize,
+    ) -> (Vec<Frame>, ResultCollector)
+    where
+        T: DispatchToMultipleDB,
+    {
+        cmd.dispatch(thread_num, |key: &[u8]| {
+            self.dispatcher.determine_database(key)
+        });
+        let expected_amount_ret = cmd.len();
+
+        let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
+        unsafe {
+            ret.set_len(expected_amount_ret);
+        }
+
+        let result_collector = cmd.get_result_collector();
+        return (ret, result_collector);
+    }
+
     pub async fn run(&mut self) -> Result<()> {
+        let thread_num = self.dispatcher.num_threads;
         while !self.shutdown_begin.is_shutdown() {
             let opt_frame = tokio::select! {
                 _ = self.shutdown_begin.recv() => {
@@ -207,26 +233,15 @@ impl Handler {
             let command = Command::new(frame);
             let ret_frame = match command {
                 Ok(Command::Traverse(mut cmd)) => {
-                    let thread_num = self.dispatcher.num_threads;
-                    cmd.dispatch(thread_num, |key: &[u8]| {
-                        self.dispatcher.determine_database(key)
-                    });
-                    let expected_amount_ret = cmd.len();
-
-                    let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
-                    unsafe {
-                        ret.set_len(expected_amount_ret);
-                    }
-
-                    let mut result_collector = cmd.get_result_collector();
-
+                    let (mut ret, mut result_collector) =
+                        self.prepare_traverse_send(&mut cmd, thread_num);
                     for _ in 0..thread_num {
                         let (db_id, cmd_copy) = cmd.next_command();
                         if cmd_copy.is_none() {
                             continue;
                         }
                         let (ret_tx, ret_rx) = oneshot::channel();
-                        let cmd_copy = cmd_copy.unwrap();
+                        let cmd_copy = cmd_copy.unwrap_oneshot();
                         self.dispatcher.tasks_tx[db_id]
                             .send(TaskParam::OneshotTask((cmd_copy, ret_tx)))?;
 
@@ -259,7 +274,10 @@ impl Handler {
                         return Err(e);
                     }
                 },
-                Ok(Command::HoldOn(_)) => todo!(),
+                Ok(Command::HoldOn(cmd)) => {
+                    self.handle_hold_on_cmd(cmd).await;
+                    continue;
+                }
             };
             trace!(
                 "[{}]<{}>ret_frame: {:?}",
@@ -270,6 +288,49 @@ impl Handler {
             self.connection.write_frame(&ret_frame).await?;
         }
         Ok(())
+    }
+
+    async fn handle_hold_on_cmd(&mut self, cmd: HoldOnCommand) -> Result<()> {
+        let (ret_tx, mut ret_rx) = mpsc::channel(BUFSIZE);
+        while !self.shutdown_begin.is_shutdown() {
+            let frame = tokio::select! {
+                _ = self.shutdown_begin.recv() => {
+                    return Ok(());
+                }
+                res = self.connection.read_frame() => {
+                    match res? {
+                        Some(f) => f,
+                        None => {
+                            return Ok(());
+                        }
+                    }
+                }
+                maybe_update = ret_rx.recv() => {
+                    if let Some(update) = maybe_update {
+                        match update {
+                            Frame::_DetachSubscribeMode => {
+                                return Ok(());
+                            }
+                            v => {
+                                self.connection.write_frame(&v).await?;
+                                continue;
+                            }
+                        }
+                    } else {
+                        return Ok(());
+                    }
+                }
+            };
+
+            trace!(
+                "[{}]<{}>frame received: {:?}",
+                self.id,
+                self.connection.id,
+                frame
+            );
+            let command = Command::new(frame);
+        }
+        todo!();
     }
 }
 

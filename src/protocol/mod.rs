@@ -29,6 +29,7 @@ pub enum Frame {
     Arrays(Vec<Frame>),
     Ok,
     NullArray,
+    _DetachSubscribeMode,
 }
 
 impl From<Bytes> for Frame {
@@ -68,41 +69,50 @@ impl Frame {
     }
 
     fn encode_msg_len(&self) -> usize {
+        use Frame::*;
         match self {
-            Frame::Ok | Frame::NullString | Frame::NullArray => 5,
-            Frame::SimpleString(v) | Frame::Errors(v) | Frame::BulkStrings(v) => {
+            Frame::Ok | NullString | NullArray => 5,
+            SimpleString(v) | Errors(v) | BulkStrings(v) => {
                 if v.len() > SMALL_BYTES_THRESHOLD {
                     v.len()
                 } else {
                     0
                 }
             }
-            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.encode_msg_len()),
-            Frame::Integers(_) => 0,
+            Arrays(v) => v.iter().fold(0, |r, f| r + f.encode_msg_len()),
+            Integers(_) => 0,
+            // internal use only, should never be encoded.
+            _DetachSubscribeMode => panic!(),
         }
     }
 
     fn msg_num(&self) -> usize {
+        use Frame::*;
         match self {
-            Frame::Ok | Frame::NullString | Frame::NullArray => 0,
-            Frame::SimpleString(b) | Frame::Errors(b) | Frame::BulkStrings(b) => {
+            Frame::Ok | NullString | NullArray => 0,
+            SimpleString(b) | Errors(b) | BulkStrings(b) => {
                 if b.len() > SMALL_BYTES_THRESHOLD {
                     1
                 } else {
                     0
                 }
             }
-            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.msg_num()),
-            Frame::Integers(_) => 0,
+            Arrays(v) => v.iter().fold(0, |r, f| r + f.msg_num()),
+            Integers(_) => 0,
+            // internal use only, should never be encoded.
+            _DetachSubscribeMode => panic!(),
         }
     }
 
     pub fn len(&self) -> usize {
+        use Frame::*;
         match self {
-            Frame::Ok | Frame::NullString | Frame::NullArray => 0,
-            Frame::SimpleString(b) | Frame::Errors(b) | Frame::BulkStrings(b) => b.len(),
-            Frame::Arrays(v) => v.len(),
-            Frame::Integers(_) => 0,
+            Frame::Ok | NullString | NullArray => 0,
+            SimpleString(b) | Errors(b) | BulkStrings(b) => b.len(),
+            Arrays(v) => v.len(),
+            Integers(_) => 0,
+            // internal use only, should never be encoded.
+            _DetachSubscribeMode => panic!(),
         }
     }
 }

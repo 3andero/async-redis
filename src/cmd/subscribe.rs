@@ -11,16 +11,7 @@ pub struct Subscribe {
     ret_tx: Option<mpsc::Sender<Frame>>,
 }
 
-impl OneshotExecDB for Subscribe {
-    fn exec(mut self, db: &mut DB) -> Frame {
-        db.subscribe(&mut self.pairs, self.handler_id, self.ret_tx);
-        Frame::Ok
-    }
-
-    fn get_key(&self) -> &[u8] {
-        &self.pairs[0].get_key()
-    }
-
+impl PubSubExecDB for Subscribe {
     fn set_extra_info(&mut self, extra: ExtraInfo) {
         use ExtraInfo::*;
         match extra {
@@ -39,6 +30,11 @@ impl Subscribe {
             handler_id: 0,
             ret_tx: None,
         }
+    }
+
+    fn exec(mut self, db: &mut DB) -> Frame {
+        db.subscribe(&mut self.pairs, self.handler_id, self.ret_tx);
+        Frame::Ok
     }
 }
 
@@ -73,4 +69,10 @@ impl DB {
 #[derive(Debug, Clone)]
 pub struct SubscribeDispatcher {}
 
-impl_traverse_command!(SendNReturn1, KeyOnly, SubscribeDispatcher, Subscribe);
+impl_traverse_command!(
+    SendNReturn1,
+    KeyOnly,
+    SubscribeDispatcher,
+    Subscribe,
+    PubSubCommand
+);

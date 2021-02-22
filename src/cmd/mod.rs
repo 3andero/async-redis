@@ -48,8 +48,18 @@ pub enum OneshotCommand {
     MSet,
     Dx,
     Incr,
+}
+
+#[enum_dispatch]
+#[derive(Debug, Clone)]
+pub enum PubSubCommand {
     Subscribe,
     Publish,
+}
+
+#[enum_dispatch(PubSubCommand)]
+pub trait PubSubExecDB {
+    fn set_extra_info(&mut self, _extra: ExtraInfo) {}
 }
 
 pub enum ExtraInfo {
@@ -59,7 +69,6 @@ pub enum ExtraInfo {
 #[enum_dispatch(OneshotCommand)]
 pub trait OneshotExecDB {
     fn exec(self, db: &mut DB) -> Frame;
-    fn set_extra_info(&mut self, _extra: ExtraInfo) {}
     fn get_key(&self) -> &[u8];
 }
 
@@ -205,6 +214,7 @@ impl Command {
             DX => Ok(Traverse(DxDispatcher::new(&mut parser)?.into())),
             SHUTDOWN => Ok(Oneshot(Dx::new(DxCommand::Shutdown).into())),
             SUBSCRIBE => Ok(HoldOn(SubscribeDispatcher::new(&mut parser)?.into())),
+            PUBLISH => todo!(),
             UNIMPLEMENTED => Err(Error::new(CommandError::NotImplemented)),
         }
     }

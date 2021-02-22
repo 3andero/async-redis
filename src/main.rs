@@ -1,5 +1,11 @@
-// #[global_allocator]
-// static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+#[cfg(target_os = "macos")]
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 
 use anyhow::Result;
 use std::net::SocketAddr;

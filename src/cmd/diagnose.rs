@@ -42,7 +42,10 @@ pub struct DxDispatcher {
 impl DispatchToMultipleDB for DxDispatcher {
     fn next_command(&mut self) -> IDCommandPair {
         self.db_amount -= 1;
-        (self.db_amount, Some(Dx::new(self.key.clone()).into()))
+        (
+            self.db_amount,
+            AtomicCommand::Oneshot(Dx::new(self.key.clone()).into()),
+        )
     }
 
     fn move_last_to(&mut self, _: usize, _: usize) {}

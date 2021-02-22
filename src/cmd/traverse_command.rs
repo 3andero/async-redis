@@ -36,7 +36,7 @@ impl MiniCommandTrait for _Single {
     }
 }
 
-pub type IDCommandPair = (usize, Option<OneshotCommand>);
+pub type IDCommandPair = (usize, AtomicCommand);
 
 #[enum_dispatch(TraverseCommand)]
 pub trait DispatchToMultipleDB {
@@ -63,6 +63,47 @@ pub trait DispatchToMultipleDB {
         for _ in 0..db_ids.len() {
             order -= 1;
             self.move_last_to(db_ids[order], order);
+        }
+    }
+}
+
+pub enum AtomicCommand {
+    Oneshot(OneshotCommand),
+    PubSub(PubSubCommand),
+    None,
+}
+
+impl AtomicCommand {
+    pub fn is_none(&self) -> bool {
+        use AtomicCommand::*;
+        match self {
+            None => true,
+            _ => false,
+        }
+    }
+
+    pub fn unwrap_oneshot(self) -> OneshotCommand {
+        match self {
+            AtomicCommand::Oneshot(c) => c,
+            _ => panic!(),
+        }
+    }
+}
+
+impl From<Option<OneshotCommand>> for AtomicCommand {
+    fn from(cmd: Option<OneshotCommand>) -> Self {
+        match cmd {
+            None => AtomicCommand::None,
+            Some(c) => AtomicCommand::Oneshot(c),
+        }
+    }
+}
+
+impl From<Option<PubSubCommand>> for AtomicCommand {
+    fn from(cmd: Option<PubSubCommand>) -> Self {
+        match cmd {
+            None => AtomicCommand::None,
+            Some(c) => AtomicCommand::PubSub(c),
         }
     }
 }
@@ -122,14 +163,14 @@ macro_rules! new_traverse_command {
 
 #[macro_export]
 macro_rules! impl_traverse_command {
-    (@Consts, $corresponding_cmd:ident) => {
+    (@Consts, $corresponding_cmd:ident, $atomic_type:ident) => {
         fn next_command(&mut self) -> IDCommandPair {
             let id = self.cmds_tbl.len() - 1;
             let cmd = self
                 .cmds_tbl
                 .pop()
                 .filter(|v| v.len() > 0)
-                .map(|v| $corresponding_cmd::new(v).into());
+                .map(|v| $atomic_type::from($corresponding_cmd::new(v))).into();
             (id, cmd)
         }
 
@@ -138,12 +179,12 @@ macro_rules! impl_traverse_command {
         }
     };
 
-    (SendNReturn1, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident) => {
+    (SendNReturn1, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident, $atomic_type:ident) => {
 
         crate::new_traverse_command!($mini_command_type, SendNReturn1, $target);
 
         impl DispatchToMultipleDB for $target {
-            impl_traverse_command!(@Consts, $corresponding_cmd);
+            impl_traverse_command!(@Consts, $corresponding_cmd, $atomic_type);
 
             fn get_result_collector(&mut self) -> ResultCollector {
                 ResultCollector::KeepFirst(1)
@@ -163,12 +204,12 @@ macro_rules! impl_traverse_command {
         }
     };
 
-    (SendNReturnN, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident) => {
+    (SendNReturnN, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident, $atomic_type:ident) => {
 
         crate::new_traverse_command!($mini_command_type, SendNReturnN, $target);
 
         impl DispatchToMultipleDB for $target {
-            impl_traverse_command!(@Consts, $corresponding_cmd);
+            impl_traverse_command!(@Consts, $corresponding_cmd, $atomic_type);
 
             fn get_result_collector(&mut self) -> ResultCollector {
                 ResultCollector::Reorder(std::mem::take(&mut self.order_tbl))

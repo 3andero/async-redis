@@ -34,4 +34,4 @@ impl OneshotExecDB for MSet {
 #[derive(Debug, Clone)]
 pub struct MSetDispatcher {}
 
-impl_traverse_command!(SendNReturn1, KeyValue, MSetDispatcher, MSet);
+impl_traverse_command!(SendNReturn1, KeyValue, MSetDispatcher, MSet, OneshotCommand);
