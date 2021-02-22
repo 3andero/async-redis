@@ -11,6 +11,7 @@ pub enum CommandTable {
     INCR(IncrVariant),
     DX,
     SHUTDOWN,
+    SUBSCRIBE,
     UNIMPLEMENTED,
 }
 
@@ -30,8 +31,9 @@ const INCRBY: usize = rolling_hash_const(b"incrby");
 const DECRBY: usize = rolling_hash_const(b"decrby");
 const DX: usize = rolling_hash_const(b"dx");
 const SHUTDOWN: usize = rolling_hash_const(b"shutdown");
+const SUBSCRIBE: usize = rolling_hash_const(b"subscribe");
 
-pub const COMMAND_NUM: usize = 16;
+pub const COMMAND_NUM: usize = 17;
 
 const UNSORTED_TBL: [(usize, CommandTable); COMMAND_NUM] = [
     (GET, CommandTable::GET(GetVariant::Get)),
@@ -48,6 +50,7 @@ const UNSORTED_TBL: [(usize, CommandTable); COMMAND_NUM] = [
     (DECR, CommandTable::INCR(IncrVariant::Decr)),
     (INCRBY, CommandTable::INCR(IncrVariant::IncrBy)),
     (DECRBY, CommandTable::INCR(IncrVariant::DecrBy)),
+    (SUBSCRIBE, CommandTable::SUBSCRIBE),
     (DX, CommandTable::DX),
     (SHUTDOWN, CommandTable::SHUTDOWN),
 ];

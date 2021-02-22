@@ -1,19 +1,49 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::parse::{Parse, ParseStream, Parser, Result};
-use syn::{parse, parse_macro_input, punctuated::Punctuated, Ident, ItemStruct, LitStr, Token};
+use syn::parse::Parser;
+use syn::{parse, parse_macro_input, ItemStruct};
+
+macro_rules! vector_push {
+    ($fields:ident, $($name:ident: $type:ty),*) => {
+        $(
+            $fields.named.push(
+                syn::Field::parse_named
+                    .parse2(quote! { pub $name: $type }).unwrap(),
+            );
+        )*
+    }
+}
 
 #[proc_macro_attribute]
-pub fn add_field(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn define_traverse_command(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item_struct = parse_macro_input!(input as ItemStruct);
-    let _ = parse_macro_input!(args as parse::Nothing);
+    let branch = parse_macro_input!(args as syn::LitStr)
+        .value()
+        .to_lowercase();
 
     if let syn::Fields::Named(ref mut fields) = item_struct.fields {
-        fields.named.push(
-            syn::Field::parse_named
-                .parse2(quote! { pub a: String })
-                .unwrap(),
-        );
+        match branch.as_bytes() {
+            b"n:1" => {
+                vector_push!(
+                    fields,
+                    db_amount: usize,
+                    cmds: Vec<MiniCommand>,
+                    cmds_tbl: Vec<Vec<MiniCommand>>,
+                    len: usize
+                );
+            }
+            b"n:n" => {
+                vector_push!(
+                    fields,
+                    db_amount: usize,
+                    cmds: Vec<MiniCommand>,
+                    cmds_tbl: Vec<Vec<MiniCommand>>,
+                    order_tbl: Vec<Vec<usize>>,
+                    len: usize
+                );
+            }
+            _ => panic!(),
+        }
     }
 
     return quote! {

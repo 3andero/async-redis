@@ -28,6 +28,8 @@ pub struct Entry {
 pub struct DB {
     pub database: FxHashMap<Bytes, Entry>,
     pub expiration: ExpirationSubModule,
+    pub subscription: FxHashMap<Bytes, Vec<usize>>,
+    pub subscriber: FxHashMap<usize, mpsc::Sender<Frame>>,
     pub id: usize,
     pub counter: u64,
     pub shutdown_tx: broadcast::Sender<()>,
@@ -64,6 +66,8 @@ impl DB {
                 expiration: BTreeMap::new(),
                 when: None,
             },
+            subscriber: FxHashMap::default(),
+            subscription: FxHashMap::default(),
             id,
             counter: 0,
             shutdown_tx,

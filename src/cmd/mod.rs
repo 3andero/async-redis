@@ -5,6 +5,7 @@ pub mod get;
 pub mod incr;
 pub mod mget;
 pub mod mset;
+pub mod publish;
 pub mod set;
 pub mod subscribe;
 pub mod traverse_command;
@@ -16,13 +17,14 @@ use get::*;
 use incr::*;
 use mget::*;
 use mset::*;
+use publish::*;
 use set::*;
 use subscribe::*;
 use traverse_command::*;
 
 use anyhow::{Error, Result};
 use std::slice::Iter;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use utils::rolling_hash_const;
 
 use crate::{db::DB, protocol::Frame, utils};
@@ -46,17 +48,24 @@ pub enum OneshotCommand {
     MSet,
     Dx,
     Incr,
+    Subscribe,
+    Publish,
+}
+
+pub enum ExtraInfo {
+    SubscribeInfo((usize, Option<mpsc::Sender<Frame>>)),
 }
 
 #[enum_dispatch(OneshotCommand)]
 pub trait OneshotExecDB {
     fn exec(self, db: &mut DB) -> Frame;
+    fn set_extra_info(&mut self, _extra: ExtraInfo) {}
     fn get_key(&self) -> &[u8];
 }
 
 #[enum_dispatch(DispatchToMultipleDB)]
 pub enum HoldOnCommand {
-    SendNReturn1,
+    Subscribe(SubscribeDispatcher),
 }
 
 pub enum ResultCollector {
@@ -75,11 +84,11 @@ impl ResultCollector {
                 if *x == 0 {
                     return Ok(());
                 }
+                *x -= 1;
                 let f = ret_rx.await.map_err(|e| Error::new(e))?;
                 unsafe {
                     ret.as_mut_ptr().add(*x).write(f);
                 }
-                *x -= 1;
                 Ok(())
             }
             ResultCollector::Reorder(tbl) => {
@@ -190,13 +199,12 @@ impl Command {
         match binary_lookup(rolling_hash(cmd_string.as_ref())?) {
             GET(v) => Ok(Oneshot(Get::new(&mut parser, v)?.into())),
             SET(v) => Ok(Oneshot(Set::new(&mut parser, v)?.into())),
-            MSET => Ok(Traverse(SendNReturn1::new(&mut parser)?.into())),
-            MGET => Ok(Traverse(
-                SendNReturnN::new(&mut parser, TraverseVariant::MGet)?.into(),
-            )),
+            MSET => Ok(Traverse(MSetDispatcher::new(&mut parser)?.into())),
+            MGET => Ok(Traverse(MGetDispatcher::new(&mut parser)?.into())),
             INCR(v) => Ok(Oneshot(Incr::new(&mut parser, v)?.into())),
             DX => Ok(Traverse(DxDispatcher::new(&mut parser)?.into())),
             SHUTDOWN => Ok(Oneshot(Dx::new(DxCommand::Shutdown).into())),
+            SUBSCRIBE => Ok(HoldOn(SubscribeDispatcher::new(&mut parser)?.into())),
             UNIMPLEMENTED => Err(Error::new(CommandError::NotImplemented)),
         }
     }

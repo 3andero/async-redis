@@ -1,4 +1,5 @@
-use crate::{cmd::*, db::DB};
+use crate::{cmd::*, db::DB, impl_traverse_command, new_traverse_command};
+use async_redis::*;
 
 #[derive(Debug, Clone)]
 pub struct MSet {
@@ -28,3 +29,9 @@ impl OneshotExecDB for MSet {
         &self.pairs[0].get_key()
     }
 }
+
+#[define_traverse_command("N:1")]
+#[derive(Debug, Clone)]
+pub struct MSetDispatcher {}
+
+impl_traverse_command!(SendNReturn1, KeyValue, MSetDispatcher, MSet);
