@@ -221,7 +221,51 @@ struct Handler {
     thread_num: usize,
 }
 
+enum CommandConvert {
+    Oneshot,
+    Subscribe,
+    Publish,
+}
+
 impl Handler {
+    async fn traverse_exec(
+        &mut self,
+        cmd: &mut impl DispatchToMultipleDB,
+        into_task: CommandConvert
+    ) -> Result<Frame> {
+            cmd.dispatch(self.thread_num, |key: &[u8]| {
+                self.dispatcher.determine_database(key)
+            });
+            let expected_amount_ret = cmd.len();
+    
+            let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
+            unsafe {
+                ret.set_len(expected_amount_ret);
+            }
+    
+            let mut result_collector = cmd.get_result_collector();
+    
+            for _ in 0..self.thread_num {
+                let (db_id, atomic_cmd) = cmd.next_command();
+                if atomic_cmd.is_none() {
+                    continue;
+                }
+                let (ret_tx, ret_rx) = oneshot::channel();
+                self.dispatcher.tasks_tx[db_id].send(match into_task {
+                    CommandConvert::Oneshot => TaskParam::OneshotTask((atomic_cmd.unwrap_oneshot(), ret_tx)),
+                    CommandConvert::Publish => TaskParam::PubSubTask((atomic_cmd.unwrap_pubsub(), ret_tx))
+                })?;
+    
+                result_collector.merge(&mut ret, ret_rx).await?;
+            }
+    
+            if ret.len() == 1 {
+                Ok(ret.pop().unwrap())
+            } else {
+                Ok(Frame::Arrays(ret))
+            }
+        }
+
     // #[instrument(skip(self))]
     pub async fn run(&mut self) -> Result<()> {
         while !self.shutdown_begin.is_shutdown() {
@@ -275,6 +319,9 @@ impl Handler {
                     }
                 },
                 Ok(Command::HoldOn(mut cmd)) => {
+                    if cmd.need_subscribe() {
+
+                    }
                     self.handle_hold_on_cmd(cmd).await;
                     continue;
                 }
@@ -341,7 +388,39 @@ impl Handler {
                 frame
             );
             let command = Command::new(frame);
+            let ret_frame = match command {
+                Err(e) => match e.downcast_ref::<CommandError>() {
+                    Some(e) => Frame::Errors(format!("{}", e).into()),
+                    None => {
+                        return Err(e);
+                    }
+                },
+                Ok(Command::HoldOn(mut cmd)) => {
+                    traverse!(use tbl, ret_tx;
+                        for (db_id, atomic_cmd) in cmd do {
+                            let mut x = atomic_cmd.unwrap_pubsub();
+                            if x.need_extra_info() {
+                                x.set_extra_info(ExtraInfo::SubscribeInfo((
+                                    self.id,
+                                    if tbl[db_id] {
+                                        None
+                                    } else {
+                                        tbl[db_id] = false;
+                                        Some(ret_tx.clone())
+                                    },
+                                )));
+                            }
+                            x
+                        } then send as PubSubTask by self
+                    )
+                }
+                _ => Frame::Errors(Bytes::from_static(
+                    b"command not allowed when subscribing to channels",
+                )),
+            };
         }
+
+        
         todo!();
     }
 }

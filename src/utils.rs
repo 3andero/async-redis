@@ -1,5 +1,5 @@
-use crate::Result;
-use anyhow::anyhow;
+use crate::{cmd::CommandError, Result};
+use anyhow::{anyhow, Error};
 use bytes::Bytes;
 use num_traits::{FromPrimitive, PrimInt, ToPrimitive, Zero};
 
@@ -91,4 +91,41 @@ pub const fn rolling_hash_const(arr: &[u8]) -> usize {
 
 pub const fn const_panic() {
     ASSERT[1];
+}
+
+pub fn rolling_hash(arr: &[u8]) -> Result<usize> {
+    let mut res = 0;
+    for &b in arr {
+        if b <= b'z' && b >= b'a' {
+            res = (res * 26 + (b - b'a') as usize) % PRIME;
+        } else if b <= b'Z' && b >= b'A' {
+            res = (res * 26 + (b - b'A') as usize) % PRIME;
+        } else {
+            return Err(Error::new(CommandError::InvalidOperation));
+        }
+    }
+    Ok(res)
+}
+#[macro_use]
+#[macro_export]
+macro_rules! impl_enum_is_branch {
+    (@branch, $target:ident, $true_branch:ident) => {
+        $target::$true_branch
+    };
+    (@branch, $target:ident, $true_branch:ident, $x:ident) => {
+        $target::$true_branch(_)
+    };
+    ($target:ident, $fn_name:ident, $(($($true_branch:ident),*)),*) => {
+        impl $target {
+            pub fn $fn_name(&self) -> bool {
+                match self {
+                    $(
+                        // $target::$true_branch(_) => true,
+                        crate::impl_enum_is_branch!(@branch, $target, $($true_branch),*) => true,
+                    )*
+                    _ => false,
+                }
+            }
+        }
+    };
 }

@@ -16,6 +16,27 @@ pub enum CommandTable {
     UNIMPLEMENTED,
 }
 
+pub fn binary_lookup(token: usize) -> CommandTable {
+    let (mut start, mut end) = (0, COMMAND_NUM);
+    let mut mi;
+    while start < end {
+        mi = (start + end) / 2;
+        if COMMAND_LOOKUP[mi].0 < token {
+            start = mi + 1;
+        } else {
+            end = mi;
+        }
+    }
+    if start == COMMAND_NUM {
+        return CommandTable::UNIMPLEMENTED;
+    }
+    if COMMAND_LOOKUP[start].0 != token {
+        return CommandTable::UNIMPLEMENTED;
+    } else {
+        return COMMAND_LOOKUP[start].1;
+    }
+}
+
 const GET: usize = rolling_hash_const(b"get");
 const TTL: usize = rolling_hash_const(b"ttl");
 const PTTL: usize = rolling_hash_const(b"pttl");

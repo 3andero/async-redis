@@ -25,7 +25,7 @@ use traverse_command::*;
 use anyhow::{Error, Result};
 use std::slice::Iter;
 use tokio::sync::{mpsc, oneshot};
-use utils::rolling_hash_const;
+use utils::{rolling_hash_const, rolling_hash};
 
 use crate::{db::DB, protocol::Frame, utils};
 
@@ -79,6 +79,8 @@ pub trait OneshotExecDB {
 pub enum HoldOnCommand {
     Subscribe(SubscribeDispatcher),
 }
+
+crate::impl_enum_is_branch!(HoldOnCommand, need_subscribe, (Subscribe, x));
 
 pub enum ResultCollector {
     Reorder(Vec<Vec<usize>>),
@@ -165,41 +167,6 @@ fn invalid_operand() -> Error {
 
 fn invalid_operation() -> Error {
     Error::new(CommandError::InvalidOperation)
-}
-
-fn rolling_hash(arr: &[u8]) -> Result<usize> {
-    let mut res = 0;
-    for &b in arr {
-        if b <= b'z' && b >= b'a' {
-            res = (res * 26 + (b - b'a') as usize) % utils::PRIME;
-        } else if b <= b'Z' && b >= b'A' {
-            res = (res * 26 + (b - b'A') as usize) % utils::PRIME;
-        } else {
-            return Err(Error::new(CommandError::InvalidOperation));
-        }
-    }
-    Ok(res)
-}
-
-fn binary_lookup(token: usize) -> CommandTable {
-    let (mut start, mut end) = (0, COMMAND_NUM);
-    let mut mi;
-    while start < end {
-        mi = (start + end) / 2;
-        if COMMAND_LOOKUP[mi].0 < token {
-            start = mi + 1;
-        } else {
-            end = mi;
-        }
-    }
-    if start == COMMAND_NUM {
-        return CommandTable::UNIMPLEMENTED;
-    }
-    if COMMAND_LOOKUP[start].0 != token {
-        return CommandTable::UNIMPLEMENTED;
-    } else {
-        return COMMAND_LOOKUP[start].1;
-    }
 }
 
 impl Command {
