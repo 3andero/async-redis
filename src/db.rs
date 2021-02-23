@@ -15,6 +15,7 @@ use tracing::{debug, info, trace};
 #[derive(Debug)]
 pub enum TaskParam {
     OneshotTask((OneshotCommand, oneshot::Sender<Frame>)),
+    PubSubTask((PubSubCommand, oneshot::Sender<Frame>)),
 }
 
 #[derive(Debug)]
@@ -28,8 +29,8 @@ pub struct Entry {
 pub struct DB {
     pub database: FxHashMap<Bytes, Entry>,
     pub expiration: ExpirationSubModule,
-    pub subscription: FxHashMap<Bytes, Vec<usize>>,
-    pub subscriber: FxHashMap<usize, mpsc::Sender<Frame>>,
+    pub subscription: FxHashMap<Bytes, Vec<u64>>,
+    pub subscriber: FxHashMap<u64, mpsc::Sender<Frame>>,
     pub id: usize,
     pub counter: u64,
     pub shutdown_tx: broadcast::Sender<()>,
@@ -146,6 +147,7 @@ pub async fn database_manager(
                 }
                 let (cmd, ret_tx) = match res.unwrap() {
                     TaskParam::OneshotTask(v) => v,
+                    TaskParam::PubSubTask(v) => todo!(),
                 };
                 trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
                 let _ = ret_tx.send(cmd.exec(&mut db));

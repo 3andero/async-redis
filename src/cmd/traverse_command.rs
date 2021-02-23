@@ -88,6 +88,13 @@ impl AtomicCommand {
             _ => panic!(),
         }
     }
+
+    pub fn unwrap_pubsub(self) -> PubSubCommand {
+        match self {
+            AtomicCommand::PubSub(c) => c,
+            _ => panic!(),
+        }
+    }
 }
 
 impl From<Option<OneshotCommand>> for AtomicCommand {

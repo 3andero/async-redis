@@ -7,7 +7,7 @@ use traverse_command::*;
 #[derive(Debug, Clone)]
 pub struct Subscribe {
     pairs: Vec<MiniCommand>,
-    handler_id: usize,
+    handler_id: u64,
     ret_tx: Option<mpsc::Sender<Frame>>,
 }
 
@@ -20,6 +20,10 @@ impl PubSubExecDB for Subscribe {
                 self.ret_tx = ret_tx;
             }
         }
+    }
+
+    fn need_extra_info(&self) -> bool {
+        true
     }
 }
 
@@ -42,7 +46,7 @@ impl DB {
     pub fn subscribe(
         &mut self,
         keys: &mut Vec<MiniCommand>,
-        handler_id: usize,
+        handler_id: u64,
         ret_tx: Option<mpsc::Sender<Frame>>,
     ) -> Frame {
         for cmd in keys.drain(..) {

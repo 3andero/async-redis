@@ -140,7 +140,8 @@ impl Listener {
                     dispatcher: self.dispatcher.clone(),
                     shutdown_begin: Shutdown::new(self.shutdown_begin_tx.subscribe()),
                     shutdown_complete_tx: self.shutdown_complete_tx.clone(),
-                    id: float_num,
+                    id: conn_id,
+                    thread_num: self.dispatcher.num_threads,
                 }
             };
 
@@ -174,6 +175,42 @@ impl Listener {
     }
 }
 
+#[macro_use]
+macro_rules! traverse {
+    ($(use $($dependency:ident),*;)?
+     for ($db_id:ident, $atomic_cmd:ident) in $cmd:ident do $do:block then send as $tasktype:ident by $self:ident) => {{
+        $cmd.dispatch($self.thread_num, |key: &[u8]| {
+            $self.dispatcher.determine_database(key)
+        });
+        let expected_amount_ret = $cmd.len();
+
+        let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
+        unsafe {
+            ret.set_len(expected_amount_ret);
+        }
+
+        let mut result_collector = $cmd.get_result_collector();
+
+        for _ in 0..$self.thread_num {
+            let ($db_id, $atomic_cmd) = $cmd.next_command();
+            if $atomic_cmd.is_none() {
+                continue;
+            }
+            let (ret_tx, ret_rx) = oneshot::channel();
+            let cmd_copy = $do;
+            $self.dispatcher.tasks_tx[$db_id].send(TaskParam::$tasktype((cmd_copy, ret_tx)))?;
+
+            result_collector.merge(&mut ret, ret_rx).await?;
+        }
+
+        if ret.len() == 1 {
+            ret.pop().unwrap()
+        } else {
+            Frame::Arrays(ret)
+        }
+    }};
+}
+
 #[derive(Debug)]
 struct Handler {
     connection: Connection,
@@ -181,34 +218,12 @@ struct Handler {
     shutdown_begin: Shutdown,
     shutdown_complete_tx: mpsc::Sender<()>,
     id: u64,
+    thread_num: usize,
 }
 
 impl Handler {
     // #[instrument(skip(self))]
-    fn prepare_traverse_send<T>(
-        &self,
-        cmd: &mut T,
-        thread_num: usize,
-    ) -> (Vec<Frame>, ResultCollector)
-    where
-        T: DispatchToMultipleDB,
-    {
-        cmd.dispatch(thread_num, |key: &[u8]| {
-            self.dispatcher.determine_database(key)
-        });
-        let expected_amount_ret = cmd.len();
-
-        let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
-        unsafe {
-            ret.set_len(expected_amount_ret);
-        }
-
-        let result_collector = cmd.get_result_collector();
-        return (ret, result_collector);
-    }
-
     pub async fn run(&mut self) -> Result<()> {
-        let thread_num = self.dispatcher.num_threads;
         while !self.shutdown_begin.is_shutdown() {
             let opt_frame = tokio::select! {
                 _ = self.shutdown_begin.recv() => {
@@ -233,26 +248,11 @@ impl Handler {
             let command = Command::new(frame);
             let ret_frame = match command {
                 Ok(Command::Traverse(mut cmd)) => {
-                    let (mut ret, mut result_collector) =
-                        self.prepare_traverse_send(&mut cmd, thread_num);
-                    for _ in 0..thread_num {
-                        let (db_id, cmd_copy) = cmd.next_command();
-                        if cmd_copy.is_none() {
-                            continue;
-                        }
-                        let (ret_tx, ret_rx) = oneshot::channel();
-                        let cmd_copy = cmd_copy.unwrap_oneshot();
-                        self.dispatcher.tasks_tx[db_id]
-                            .send(TaskParam::OneshotTask((cmd_copy, ret_tx)))?;
-
-                        result_collector.merge(&mut ret, ret_rx).await?;
-                    }
-
-                    if ret.len() == 1 {
-                        ret.pop().unwrap()
-                    } else {
-                        Frame::Arrays(ret)
-                    }
+                    traverse!(
+                        for (db_id, atomic_cmd) in cmd do {
+                            atomic_cmd.unwrap_oneshot()
+                        } then send as OneshotTask by self
+                    )
                 }
                 Ok(Command::Oneshot(cmd)) => {
                     trace!(
@@ -274,7 +274,7 @@ impl Handler {
                         return Err(e);
                     }
                 },
-                Ok(Command::HoldOn(cmd)) => {
+                Ok(Command::HoldOn(mut cmd)) => {
                     self.handle_hold_on_cmd(cmd).await;
                     continue;
                 }
@@ -290,8 +290,20 @@ impl Handler {
         Ok(())
     }
 
-    async fn handle_hold_on_cmd(&mut self, cmd: HoldOnCommand) -> Result<()> {
+    async fn handle_hold_on_cmd(&mut self, mut cmd: HoldOnCommand) -> Result<()> {
         let (ret_tx, mut ret_rx) = mpsc::channel(BUFSIZE);
+        let mut tbl = vec![false; self.thread_num];
+        traverse!(use tbl, ret_tx;
+            for (db_id, atomic_cmd) in cmd do {
+                tbl[db_id] = true;
+                let mut x = atomic_cmd.unwrap_pubsub();
+                if x.need_extra_info() {
+                    x.set_extra_info(ExtraInfo::SubscribeInfo((self.id, Some(ret_tx.clone()))))
+                }
+                x
+            } then send as PubSubTask by self
+        );
+
         while !self.shutdown_begin.is_shutdown() {
             let frame = tokio::select! {
                 _ = self.shutdown_begin.recv() => {

@@ -60,10 +60,13 @@ pub enum PubSubCommand {
 #[enum_dispatch(PubSubCommand)]
 pub trait PubSubExecDB {
     fn set_extra_info(&mut self, _extra: ExtraInfo) {}
+    fn need_extra_info(&self) -> bool {
+        false
+    }
 }
 
 pub enum ExtraInfo {
-    SubscribeInfo((usize, Option<mpsc::Sender<Frame>>)),
+    SubscribeInfo((u64, Option<mpsc::Sender<Frame>>)),
 }
 
 #[enum_dispatch(OneshotCommand)]
