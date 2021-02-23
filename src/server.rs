@@ -254,6 +254,11 @@ impl Handler {
                 self.dispatcher.tasks_tx[db_id].send(match into_task {
                     CommandConvert::Oneshot => TaskParam::OneshotTask((atomic_cmd.unwrap_oneshot(), ret_tx)),
                     CommandConvert::Publish => TaskParam::PubSubTask((atomic_cmd.unwrap_pubsub(), ret_tx))
+                    CommandConvert::Subscribe => {
+                        let x = atomic_cmd.unwrap_pubsub();
+                        x.set_extra
+                        TaskParam::PubSubTask((, ret_tx))
+                    }
                 })?;
     
                 result_collector.merge(&mut ret, ret_rx).await?;
