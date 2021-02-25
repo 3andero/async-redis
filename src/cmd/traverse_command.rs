@@ -46,6 +46,7 @@ pub trait DispatchToMultipleDB {
     fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize);
 }
 
+#[derive(Debug)]
 pub enum AtomicCommand {
     Oneshot(OneshotCommand),
     PubSub(PubSubCommand),

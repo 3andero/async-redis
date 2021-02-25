@@ -76,6 +76,7 @@ pub trait OneshotExecDB {
 }
 
 #[enum_dispatch(InitSubscription, DispatchToMultipleDB)]
+#[derive(Debug)]
 pub enum HoldOnCommand {
     Subscribe(SubscribeDispatcher),
     Publish(PublishDispatcher),

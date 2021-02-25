@@ -104,8 +104,7 @@ impl InitSubscription for SubscribeDispatcher {
         ret_tx: &mpsc::Sender<Frame>,
         handler_id: u64,
     ) {
-        let cmd_tbl = Vec::<Vec<MiniCommand>>::new();
-        self.ret_txs = cmd_tbl
+        self.ret_txs = self.cmds_tbl
             .iter()
             .enumerate()
             .map(|(id, cmds)| {

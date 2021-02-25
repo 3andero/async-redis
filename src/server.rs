@@ -221,20 +221,24 @@ struct Handler {
     thread_num: usize,
 }
 
+#[derive(Debug)]
 enum CommandConvert {
     Oneshot,
     PubSub,
 }
 
 impl Handler {
-    async fn traverse_exec(
-        &mut self,
-        cmd: &mut impl DispatchToMultipleDB,
-        into_task: CommandConvert,
-    ) -> Result<Frame> {
-        cmd.dispatch(self.thread_num, |key: &[u8]| {
-            self.dispatcher.determine_database(key)
-        });
+    async fn traverse_exec<T>(&mut self, cmd: &mut T, into_task: CommandConvert) -> Result<Frame>
+    where
+        T: DispatchToMultipleDB + std::fmt::Debug,
+    {
+        trace!(
+            "[{}]<{}>enter traverse send: {:?}, {:?}",
+            self.id,
+            self.connection.id,
+            into_task,
+            cmd,
+        );
         let expected_amount_ret = cmd.len();
 
         let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
@@ -250,6 +254,13 @@ impl Handler {
                 continue;
             }
             let (ret_tx, ret_rx) = oneshot::channel();
+            trace!(
+                "[{}]<{}>send to db: {}: {:?}",
+                self.id,
+                self.connection.id,
+                db_id,
+                atomic_cmd
+            );
             self.dispatcher.tasks_tx[db_id].send(match into_task {
                 CommandConvert::Oneshot => {
                     TaskParam::OneshotTask((atomic_cmd.unwrap_oneshot(), ret_tx))
@@ -260,6 +271,12 @@ impl Handler {
             })?;
 
             result_collector.merge(&mut ret, ret_rx).await?;
+            trace!(
+                "[{}]<{}>merge db {} result",
+                self.id,
+                self.connection.id,
+                db_id
+            );
         }
 
         if ret.len() == 1 {
@@ -300,6 +317,9 @@ impl Handler {
                     //         atomic_cmd.unwrap_oneshot()
                     //     } then send as OneshotTask by self
                     // )
+                    cmd.dispatch(self.thread_num, |key: &[u8]| {
+                        self.dispatcher.determine_database(key)
+                    });
                     self.traverse_exec(&mut cmd, CommandConvert::Oneshot)
                         .await?
                 }
@@ -324,9 +344,11 @@ impl Handler {
                     }
                 },
                 Ok(Command::HoldOn(mut cmd)) => {
+                    cmd.dispatch(self.thread_num, |key: &[u8]| {
+                        self.dispatcher.determine_database(key)
+                    });
                     if !cmd.need_subscribe() {
-                        self.traverse_exec(&mut cmd, CommandConvert::PubSub)
-                            .await?
+                        self.traverse_exec(&mut cmd, CommandConvert::PubSub).await?
                     } else {
                         self.handle_hold_on_cmd(&mut cmd).await?;
                         continue;
@@ -345,6 +367,11 @@ impl Handler {
     }
 
     async fn handle_hold_on_cmd(&mut self, cmd: &mut HoldOnCommand) -> Result<()> {
+        trace!(
+            "[{}]<{}>enter handle_hold_on_cmd",
+            self.id,
+            self.connection.id
+        );
         let (ret_tx, mut ret_rx) = mpsc::channel(BUFSIZE);
         let mut sub_state = vec![false; self.thread_num];
         cmd.set_subscription(&mut sub_state, &ret_tx, self.id);
@@ -396,6 +423,9 @@ impl Handler {
                     }
                 },
                 Ok(Command::HoldOn(mut cmd)) => {
+                    cmd.dispatch(self.thread_num, |key: &[u8]| {
+                        self.dispatcher.determine_database(key)
+                    });
                     if cmd.need_subscribe() {
                         cmd.set_subscription(&mut sub_state, &ret_tx, self.id);
                     }
