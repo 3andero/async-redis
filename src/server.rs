@@ -312,11 +312,6 @@ impl Handler {
             let command = Command::new(frame);
             let ret_frame = match command {
                 Ok(Command::Traverse(mut cmd)) => {
-                    // traverse!(
-                    //     for (db_id, atomic_cmd) in cmd do {
-                    //         atomic_cmd.unwrap_oneshot()
-                    //     } then send as OneshotTask by self
-                    // )
                     cmd.dispatch(self.thread_num, |key: &[u8]| {
                         self.dispatcher.determine_database(key)
                     });

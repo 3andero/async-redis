@@ -1,7 +1,9 @@
 use crate::{cmd::CommandError, Result};
+use std::{hash::Hash, rc::Rc};
 use anyhow::{anyhow, Error};
 use bytes::Bytes;
 use num_traits::{FromPrimitive, PrimInt, ToPrimitive, Zero};
+use rustc_hash::FxHashMap;
 
 #[macro_export]
 macro_rules! BytesToString {
@@ -128,4 +130,26 @@ macro_rules! impl_enum_is_branch {
             }
         }
     };
+}
+
+pub struct VecMap<T> where T: Clone+Eq+Hash {
+    vec: Vec<Rc<T>>,
+    map: FxHashMap<Rc<T>, usize>,
+}
+
+impl<T> VecMap<T> where T: Clone+Eq+Hash {
+    pub fn new() -> Self {
+        Self {
+            vec: Vec::new(),
+            map: FxHashMap::default(),
+        }
+    }
+
+    pub fn insert(&mut self, k: T) {
+        if !self.map.contains_key(&k) {
+            let rc_k = Rc::new(k);
+            self.vec.push(rc_k.clone());
+            self.map.insert(k, self.vec.len() - 1);
+        }
+    }
 }
