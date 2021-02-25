@@ -42,29 +42,8 @@ pub type IDCommandPair = (usize, AtomicCommand);
 pub trait DispatchToMultipleDB {
     fn len(&self) -> usize;
     fn next_command(&mut self) -> IDCommandPair;
-    fn iter_data(&self) -> Iter<MiniCommand>;
-    fn move_last_to(&mut self, db_id: usize, original_idx: usize);
-    fn init_tbls(&mut self, vec: &Vec<usize>);
     fn get_result_collector(&mut self) -> ResultCollector;
-    fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
-        let mut tbl_len = vec![0; db_amount];
-        let db_ids: Vec<usize> = self
-            .iter_data()
-            .map(|v| {
-                let id = dispatch_fn(v.get_key());
-                tbl_len[id] += 1 as usize;
-                id
-            })
-            .collect();
-
-        self.init_tbls(&tbl_len);
-
-        let mut order = db_ids.len();
-        for _ in 0..db_ids.len() {
-            order -= 1;
-            self.move_last_to(db_ids[order], order);
-        }
-    }
+    fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize);
 }
 
 pub enum AtomicCommand {
@@ -123,6 +102,7 @@ macro_rules! new_traverse_command {
             db_amount: 0,
             cmds_tbl: Vec::new(),
             len: $len,
+            ..Default::default()
         })
     };
     (@Construct, SendNReturnN, $cmds:ident, $len:ident) => {
@@ -132,6 +112,7 @@ macro_rules! new_traverse_command {
             cmds_tbl: Vec::new(),
             order_tbl: Vec::new(),
             len: $len,
+            ..Default::default()
         })
     };
     (KeyValue, $type:ident, $target:ident) => {
@@ -169,29 +150,36 @@ macro_rules! new_traverse_command {
 }
 
 #[macro_export]
+macro_rules! default_pop {
+    ($self:ident) => {
+        $self.cmds_tbl.pop().filter(|v| v.len() > 0)
+    };
+}
+
+#[macro_export]
 macro_rules! impl_traverse_command {
-    (@Consts, $corresponding_cmd:ident, $atomic_type:ident) => {
+    (@Consts, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
         fn next_command(&mut self) -> IDCommandPair {
             let id = self.cmds_tbl.len() - 1;
-            let cmd = self
-                .cmds_tbl
-                .pop()
-                .filter(|v| v.len() > 0)
+            let cmd = $pop!(self)
                 .map(|v| $atomic_type::from($corresponding_cmd::new(v))).into();
             (id, cmd)
-        }
-
-        fn iter_data(&self) -> Iter<MiniCommand> {
-            self.cmds.iter()
         }
     };
 
     (SendNReturn1, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident, $atomic_type:ident) => {
+        impl_traverse_command!(SendNReturn1, $mini_command_type, $target, $corresponding_cmd, $atomic_type, default_pop);
+    };
+    (SendNReturnN, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident, $atomic_type:ident) => {
+        impl_traverse_command!(SendNReturnN, $mini_command_type, $target, $corresponding_cmd, $atomic_type, default_pop);
+    };
+
+    (SendNReturn1, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
 
         crate::new_traverse_command!($mini_command_type, SendNReturn1, $target);
 
         impl DispatchToMultipleDB for $target {
-            impl_traverse_command!(@Consts, $corresponding_cmd, $atomic_type);
+            impl_traverse_command!(@Consts, $corresponding_cmd, $atomic_type, $pop);
 
             fn get_result_collector(&mut self) -> ResultCollector {
                 ResultCollector::KeepFirst(1)
@@ -201,22 +189,32 @@ macro_rules! impl_traverse_command {
                 1
             }
 
-            fn init_tbls(&mut self, vec: &Vec<usize>) {
-                self.cmds_tbl = vec.iter().map(|v| Vec::with_capacity(*v)).collect();
-            }
+            fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
+                let mut tbl_len = vec![0; db_amount];
+                let mut db_ids: Vec<usize> = self
+                    .cmds.iter()
+                    .map(|v| {
+                        let id = dispatch_fn(v.get_key());
+                        tbl_len[id] += 1 as usize;
+                        id
+                    })
+                    .collect();
 
-            fn move_last_to(&mut self, db_id: usize, _: usize) {
-                self.cmds_tbl[db_id].push(self.cmds.pop().unwrap());
+                self.cmds_tbl = tbl_len.iter().map(|v| Vec::with_capacity(*v)).collect();
+
+                while let Some(db_id) = db_ids.pop() {
+                    self.cmds_tbl[db_id].push(self.cmds.pop().unwrap());
+                }
             }
         }
     };
 
-    (SendNReturnN, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident, $atomic_type:ident) => {
+    (SendNReturnN, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
 
         crate::new_traverse_command!($mini_command_type, SendNReturnN, $target);
 
         impl DispatchToMultipleDB for $target {
-            impl_traverse_command!(@Consts, $corresponding_cmd, $atomic_type);
+            impl_traverse_command!(@Consts, $corresponding_cmd, $atomic_type, $pop);
 
             fn get_result_collector(&mut self) -> ResultCollector {
                 ResultCollector::Reorder(std::mem::take(&mut self.order_tbl))
@@ -226,14 +224,24 @@ macro_rules! impl_traverse_command {
                 self.len
             }
 
-            fn init_tbls(&mut self, vec: &Vec<usize>) {
-                self.cmds_tbl = vec.iter().map(|v| Vec::with_capacity(*v)).collect();
-                self.order_tbl = vec.iter().map(|v| Vec::with_capacity(*v)).collect();
-            }
+            fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
+                let mut tbl_len = vec![0; db_amount];
+                let mut db_ids: Vec<usize> = self
+                    .cmds.iter()
+                    .map(|v| {
+                        let id = dispatch_fn(v.get_key());
+                        tbl_len[id] += 1 as usize;
+                        id
+                    })
+                    .collect();
 
-            fn move_last_to(&mut self, db_id: usize, original_idx: usize) {
-                self.cmds_tbl[db_id].push(self.cmds.pop().unwrap());
-                self.order_tbl[db_id].push(original_idx);
+                self.cmds_tbl = tbl_len.iter().map(|v| Vec::with_capacity(*v)).collect();
+                self.order_tbl = tbl_len.iter().map(|v| Vec::with_capacity(*v)).collect();
+
+                while let Some(db_id) = db_ids.pop() {
+                    self.cmds_tbl[db_id].push(self.cmds.pop().unwrap());
+                    self.order_tbl[db_id].push(db_ids.len());
+                }
             }
         }
     };

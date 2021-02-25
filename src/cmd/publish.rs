@@ -9,7 +9,7 @@ pub struct Publish {
 impl PubSubExecDB for Publish {}
 
 impl Publish {
-    async fn exec(self, db: &mut DB) -> Frame {
+    pub async fn exec(self, db: &mut DB) -> Frame {
         if let Some(listeners) = db.subscription.get(&self.key) {
             let mut sent = 0;
             for &id in listeners {
@@ -48,19 +48,10 @@ impl DispatchToMultipleDB for PublishDispatcher {
         )
     }
 
-    fn move_last_to(&mut self, _: usize, _: usize) {}
-
     fn get_result_collector(&mut self) -> ResultCollector {
         ResultCollector::KeepFirst(self.db_amount)
     }
 
-    fn iter_data(&self) -> Iter<MiniCommand> {
-        unimplemented!()
-    }
-
-    fn init_tbls(&mut self, _: &Vec<usize>) {
-        unimplemented!()
-    }
     fn dispatch(&mut self, db_amount: usize, _: impl Fn(&[u8]) -> usize) {
         self.db_amount = db_amount;
     }
@@ -80,3 +71,5 @@ impl PublishDispatcher {
         })
     }
 }
+
+impl InitSubscription for PublishDispatcher {}

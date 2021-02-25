@@ -145,12 +145,21 @@ pub async fn database_manager(
                 if res.is_none() {
                     continue;
                 }
-                let (cmd, ret_tx) = match res.unwrap() {
-                    TaskParam::OneshotTask(v) => v,
-                    TaskParam::PubSubTask(v) => todo!(),
+                match res.unwrap() {
+                    TaskParam::OneshotTask((cmd, ret_tx)) => {
+                        trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
+                        let _ = ret_tx.send(cmd.exec(&mut db));
+                    },
+                    TaskParam::PubSubTask((cmd, ret_tx)) => match cmd {
+                        PubSubCommand::Subscribe(_cmd) => {
+                            let _ = ret_tx.send(_cmd.exec(&mut db));
+                        }
+                        PubSubCommand::Publish(_cmd) => {
+                            let _ = ret_tx.send(_cmd.exec(&mut db).await);
+                        }
+                    },
                 };
-                trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
-                let _ = ret_tx.send(cmd.exec(&mut db));
+
             }
             _ = tokio::time::sleep_until(
                 when.map(|v| v.max(now + Duration::new(10, 0)))

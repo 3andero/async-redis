@@ -28,15 +28,15 @@ impl PubSubExecDB for Subscribe {
 }
 
 impl Subscribe {
-    pub fn new(pairs: Vec<MiniCommand>) -> Self {
+    pub fn new(value: (Vec<MiniCommand>, Option<mpsc::Sender<Frame>>, u64)) -> Self {
         Self {
-            pairs,
-            handler_id: 0,
-            ret_tx: None,
+            pairs: value.0,
+            handler_id: value.2,
+            ret_tx: value.1,
         }
     }
 
-    fn exec(mut self, db: &mut DB) -> Frame {
+    pub fn exec(mut self, db: &mut DB) -> Frame {
         db.subscribe(&mut self.pairs, self.handler_id, self.ret_tx);
         Frame::Ok
     }
@@ -70,13 +70,53 @@ impl DB {
     }
 }
 #[define_traverse_command("N:1")]
-#[derive(Debug, Clone)]
-pub struct SubscribeDispatcher {}
+#[derive(Debug, Clone, Default)]
+pub struct SubscribeDispatcher {
+    ret_txs: Vec<Option<mpsc::Sender<Frame>>>,
+    handler_id: u64,
+}
+
+#[macro_export]
+macro_rules! pop_ret_id {
+    ($self:ident) => {{
+        let ret_tx = $self.ret_txs.pop().unwrap();
+        $self
+            .cmds_tbl
+            .pop()
+            .filter(|v| v.len() > 0)
+            .map(|v| (v, ret_tx, $self.handler_id))
+    }};
+}
 
 impl_traverse_command!(
     SendNReturn1,
     KeyOnly,
     SubscribeDispatcher,
     Subscribe,
-    PubSubCommand
+    PubSubCommand,
+    pop_ret_id
 );
+
+impl InitSubscription for SubscribeDispatcher {
+    fn set_subscription(
+        &mut self,
+        sub_state: &mut Vec<bool>,
+        ret_tx: &mpsc::Sender<Frame>,
+        handler_id: u64,
+    ) {
+        let cmd_tbl = Vec::<Vec<MiniCommand>>::new();
+        self.ret_txs = cmd_tbl
+            .iter()
+            .enumerate()
+            .map(|(id, cmds)| {
+                if cmds.len() > 0 && !sub_state[id] {
+                    sub_state[id] = true;
+                    Some(ret_tx.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.handler_id = handler_id;
+    }
+}

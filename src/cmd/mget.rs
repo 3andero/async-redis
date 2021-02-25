@@ -1,4 +1,4 @@
-use crate::{cmd::*, db::DB, impl_traverse_command, new_traverse_command};
+use crate::{cmd::*, db::DB, impl_traverse_command, new_traverse_command, *};
 use async_redis::*;
 
 #[derive(Debug, Clone)]
@@ -33,7 +33,7 @@ impl OneshotExecDB for MGet {
 }
 
 #[define_traverse_command("N:N")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MGetDispatcher {}
 
 impl_traverse_command!(SendNReturnN, KeyOnly, MGetDispatcher, MGet, OneshotCommand);

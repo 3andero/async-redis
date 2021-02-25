@@ -223,53 +223,51 @@ struct Handler {
 
 enum CommandConvert {
     Oneshot,
-    Subscribe,
-    Publish,
+    PubSub,
 }
 
 impl Handler {
     async fn traverse_exec(
         &mut self,
         cmd: &mut impl DispatchToMultipleDB,
-        into_task: CommandConvert
+        into_task: CommandConvert,
     ) -> Result<Frame> {
-            cmd.dispatch(self.thread_num, |key: &[u8]| {
-                self.dispatcher.determine_database(key)
-            });
-            let expected_amount_ret = cmd.len();
-    
-            let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
-            unsafe {
-                ret.set_len(expected_amount_ret);
-            }
-    
-            let mut result_collector = cmd.get_result_collector();
-    
-            for _ in 0..self.thread_num {
-                let (db_id, atomic_cmd) = cmd.next_command();
-                if atomic_cmd.is_none() {
-                    continue;
-                }
-                let (ret_tx, ret_rx) = oneshot::channel();
-                self.dispatcher.tasks_tx[db_id].send(match into_task {
-                    CommandConvert::Oneshot => TaskParam::OneshotTask((atomic_cmd.unwrap_oneshot(), ret_tx)),
-                    CommandConvert::Publish => TaskParam::PubSubTask((atomic_cmd.unwrap_pubsub(), ret_tx))
-                    CommandConvert::Subscribe => {
-                        let x = atomic_cmd.unwrap_pubsub();
-                        x.set_extra
-                        TaskParam::PubSubTask((, ret_tx))
-                    }
-                })?;
-    
-                result_collector.merge(&mut ret, ret_rx).await?;
-            }
-    
-            if ret.len() == 1 {
-                Ok(ret.pop().unwrap())
-            } else {
-                Ok(Frame::Arrays(ret))
-            }
+        cmd.dispatch(self.thread_num, |key: &[u8]| {
+            self.dispatcher.determine_database(key)
+        });
+        let expected_amount_ret = cmd.len();
+
+        let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
+        unsafe {
+            ret.set_len(expected_amount_ret);
         }
+
+        let mut result_collector = cmd.get_result_collector();
+
+        for _ in 0..self.thread_num {
+            let (db_id, atomic_cmd) = cmd.next_command();
+            if atomic_cmd.is_none() {
+                continue;
+            }
+            let (ret_tx, ret_rx) = oneshot::channel();
+            self.dispatcher.tasks_tx[db_id].send(match into_task {
+                CommandConvert::Oneshot => {
+                    TaskParam::OneshotTask((atomic_cmd.unwrap_oneshot(), ret_tx))
+                }
+                CommandConvert::PubSub => {
+                    TaskParam::PubSubTask((atomic_cmd.unwrap_pubsub(), ret_tx))
+                }
+            })?;
+
+            result_collector.merge(&mut ret, ret_rx).await?;
+        }
+
+        if ret.len() == 1 {
+            Ok(ret.pop().unwrap())
+        } else {
+            Ok(Frame::Arrays(ret))
+        }
+    }
 
     // #[instrument(skip(self))]
     pub async fn run(&mut self) -> Result<()> {
@@ -297,11 +295,13 @@ impl Handler {
             let command = Command::new(frame);
             let ret_frame = match command {
                 Ok(Command::Traverse(mut cmd)) => {
-                    traverse!(
-                        for (db_id, atomic_cmd) in cmd do {
-                            atomic_cmd.unwrap_oneshot()
-                        } then send as OneshotTask by self
-                    )
+                    // traverse!(
+                    //     for (db_id, atomic_cmd) in cmd do {
+                    //         atomic_cmd.unwrap_oneshot()
+                    //     } then send as OneshotTask by self
+                    // )
+                    self.traverse_exec(&mut cmd, CommandConvert::Oneshot)
+                        .await?
                 }
                 Ok(Command::Oneshot(cmd)) => {
                     trace!(
@@ -324,11 +324,13 @@ impl Handler {
                     }
                 },
                 Ok(Command::HoldOn(mut cmd)) => {
-                    if cmd.need_subscribe() {
-
+                    if !cmd.need_subscribe() {
+                        self.traverse_exec(&mut cmd, CommandConvert::PubSub)
+                            .await?
+                    } else {
+                        self.handle_hold_on_cmd(&mut cmd).await?;
+                        continue;
                     }
-                    self.handle_hold_on_cmd(cmd).await;
-                    continue;
                 }
             };
             trace!(
@@ -342,19 +344,12 @@ impl Handler {
         Ok(())
     }
 
-    async fn handle_hold_on_cmd(&mut self, mut cmd: HoldOnCommand) -> Result<()> {
+    async fn handle_hold_on_cmd(&mut self, cmd: &mut HoldOnCommand) -> Result<()> {
         let (ret_tx, mut ret_rx) = mpsc::channel(BUFSIZE);
-        let mut tbl = vec![false; self.thread_num];
-        traverse!(use tbl, ret_tx;
-            for (db_id, atomic_cmd) in cmd do {
-                tbl[db_id] = true;
-                let mut x = atomic_cmd.unwrap_pubsub();
-                if x.need_extra_info() {
-                    x.set_extra_info(ExtraInfo::SubscribeInfo((self.id, Some(ret_tx.clone()))))
-                }
-                x
-            } then send as PubSubTask by self
-        );
+        let mut sub_state = vec![false; self.thread_num];
+        cmd.set_subscription(&mut sub_state, &ret_tx, self.id);
+        let ret_frame = self.traverse_exec(cmd, CommandConvert::PubSub).await?;
+        self.connection.write_frame(&ret_frame).await?;
 
         while !self.shutdown_begin.is_shutdown() {
             let frame = tokio::select! {
@@ -401,32 +396,19 @@ impl Handler {
                     }
                 },
                 Ok(Command::HoldOn(mut cmd)) => {
-                    traverse!(use tbl, ret_tx;
-                        for (db_id, atomic_cmd) in cmd do {
-                            let mut x = atomic_cmd.unwrap_pubsub();
-                            if x.need_extra_info() {
-                                x.set_extra_info(ExtraInfo::SubscribeInfo((
-                                    self.id,
-                                    if tbl[db_id] {
-                                        None
-                                    } else {
-                                        tbl[db_id] = false;
-                                        Some(ret_tx.clone())
-                                    },
-                                )));
-                            }
-                            x
-                        } then send as PubSubTask by self
-                    )
+                    if cmd.need_subscribe() {
+                        cmd.set_subscription(&mut sub_state, &ret_tx, self.id);
+                    }
+                    self.traverse_exec(&mut cmd, CommandConvert::PubSub).await?
                 }
                 _ => Frame::Errors(Bytes::from_static(
                     b"command not allowed when subscribing to channels",
                 )),
             };
+            self.connection.write_frame(&ret_frame).await?;
         }
 
-        
-        todo!();
+        Ok(())
     }
 }
 

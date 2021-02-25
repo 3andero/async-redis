@@ -65,6 +65,7 @@ impl Frame {
             Frame::BulkStrings(v) => 5 + v.len() + len_of(v.len()),
             &Frame::Integers(v) => len_of(v) + 3,
             Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.raw_bytes_len()),
+            _DetachSubscribeMode => panic!(),
         }
     }
 

@@ -25,7 +25,7 @@ use traverse_command::*;
 use anyhow::{Error, Result};
 use std::slice::Iter;
 use tokio::sync::{mpsc, oneshot};
-use utils::{rolling_hash_const, rolling_hash};
+use utils::{rolling_hash, rolling_hash_const};
 
 use crate::{db::DB, protocol::Frame, utils};
 
@@ -75,12 +75,24 @@ pub trait OneshotExecDB {
     fn get_key(&self) -> &[u8];
 }
 
-#[enum_dispatch(DispatchToMultipleDB)]
+#[enum_dispatch(InitSubscription, DispatchToMultipleDB)]
 pub enum HoldOnCommand {
     Subscribe(SubscribeDispatcher),
+    Publish(PublishDispatcher),
 }
 
 crate::impl_enum_is_branch!(HoldOnCommand, need_subscribe, (Subscribe, x));
+
+#[enum_dispatch]
+pub trait InitSubscription {
+    fn set_subscription(
+        &mut self,
+        _sub_state: &mut Vec<bool>,
+        _ret_tx: &mpsc::Sender<Frame>,
+        _handler_id: u64,
+    ) {
+    }
+}
 
 pub enum ResultCollector {
     Reorder(Vec<Vec<usize>>),
@@ -184,7 +196,7 @@ impl Command {
             DX => Ok(Traverse(DxDispatcher::new(&mut parser)?.into())),
             SHUTDOWN => Ok(Oneshot(Dx::new(DxCommand::Shutdown).into())),
             SUBSCRIBE => Ok(HoldOn(SubscribeDispatcher::new(&mut parser)?.into())),
-            PUBLISH => todo!(),
+            PUBLISH => Ok(HoldOn(PublishDispatcher::new(&mut parser)?.into())),
             UNIMPLEMENTED => Err(Error::new(CommandError::NotImplemented)),
         }
     }
