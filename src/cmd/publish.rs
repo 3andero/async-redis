@@ -12,7 +12,7 @@ impl Publish {
     pub async fn exec(self, db: &mut DB) -> Frame {
         if let Some(listeners) = db.subscription.get(&self.key) {
             let mut sent = 0;
-            for &id in listeners {
+            for &id in listeners.iter() {
                 if let Some(sender) = db.subscriber.get(&id) {
                     if sender.send(self.val.clone()).await.is_ok() {
                         sent += 1;

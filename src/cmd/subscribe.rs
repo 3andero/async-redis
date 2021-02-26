@@ -1,5 +1,5 @@
 use super::MiniCommand;
-use crate::{cmd::*, protocol::Frame, *};
+use crate::{cmd::*, db::SubscriptionSubModule, protocol::Frame, utils::VecMap, *};
 use async_redis::*;
 use tokio::sync::mpsc;
 use traverse_command::*;
@@ -37,12 +37,13 @@ impl Subscribe {
     }
 
     pub fn exec(mut self, db: &mut DB) -> Frame {
-        db.subscribe(&mut self.pairs, self.handler_id, self.ret_tx);
+        db.subscribe
+            .subscribe(&mut self.pairs, self.handler_id, self.ret_tx);
         Frame::Ok
     }
 }
 
-impl DB {
+impl SubscriptionSubModule {
     pub fn subscribe(
         &mut self,
         keys: &mut Vec<MiniCommand>,
@@ -54,15 +55,16 @@ impl DB {
                 MiniCommand::Single(key) => self
                     .subscription
                     .entry(key)
-                    .or_insert_with(|| Vec::with_capacity(1))
-                    .push(handler_id),
+                    .and_modify(|vm| vm.push(&handler_id))
+                    .or_insert_with(|| VecMap::with_capacity(1))
+                    .push(&handler_id),
                 _ => panic!(),
             }
         }
 
         match ret_tx {
             Some(s) => {
-                self.subscriber.insert(handler_id, s);
+                self.subscriber.insert(handler_id, (s, Vec::new()));
             }
             None => (),
         }
@@ -104,7 +106,8 @@ impl InitSubscription for SubscribeDispatcher {
         ret_tx: &mpsc::Sender<Frame>,
         handler_id: u64,
     ) {
-        self.ret_txs = self.cmds_tbl
+        self.ret_txs = self
+            .cmds_tbl
             .iter()
             .enumerate()
             .map(|(id, cmds)| {

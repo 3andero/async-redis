@@ -6,7 +6,6 @@ static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-
 use anyhow::Result;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;

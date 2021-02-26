@@ -1,4 +1,4 @@
-use crate::{cmd::*, protocol::Frame};
+use crate::{cmd::*, protocol::Frame, utils::VecMap};
 use bytes::*;
 use diagnose::DxCommand;
 use rand::seq::SliceRandom;
@@ -29,8 +29,9 @@ pub struct Entry {
 pub struct DB {
     pub database: FxHashMap<Bytes, Entry>,
     pub expiration: ExpirationSubModule,
-    pub subscription: FxHashMap<Bytes, Vec<u64>>,
-    pub subscriber: FxHashMap<u64, mpsc::Sender<Frame>>,
+    pub subscribe: SubscriptionSubModule,
+    // pub subscription: FxHashMap<Bytes, VecMap<u64>>,
+    // pub subscriber: FxHashMap<u64, mpsc::Sender<Frame>>,
     pub id: usize,
     pub counter: u64,
     pub shutdown_tx: broadcast::Sender<()>,
@@ -59,6 +60,23 @@ impl ExpirationSubModule {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct SubscriptionSubModule {
+    pub counter: usize,
+    pub channels: FxHashMap<Bytes, usize>,
+    pub channel_info: FxHashMap<usize, Bytes>,
+    pub subscription: FxHashMap<usize, VecMap<u64>>,
+    pub subscriber: FxHashMap<u64, (mpsc::Sender<Frame>, Vec<usize>)>,
+}
+
+impl SubscriptionSubModule {
+    pub fn new() -> Self {
+        Self {
+            ..Default::default()
+        }
+    }
+}
+
 impl DB {
     fn new(id: usize, shutdown_tx: broadcast::Sender<()>) -> Self {
         Self {
@@ -67,8 +85,9 @@ impl DB {
                 expiration: BTreeMap::new(),
                 when: None,
             },
-            subscriber: FxHashMap::default(),
-            subscription: FxHashMap::default(),
+            // subscriber: FxHashMap::default(),
+            // subscription: FxHashMap::default(),
+            subscribe: SubscriptionSubModule::new(),
             id,
             counter: 0,
             shutdown_tx,

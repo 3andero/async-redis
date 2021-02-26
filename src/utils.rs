@@ -1,9 +1,9 @@
 use crate::{cmd::CommandError, Result};
-use std::{hash::Hash, rc::Rc};
 use anyhow::{anyhow, Error};
 use bytes::Bytes;
 use num_traits::{FromPrimitive, PrimInt, ToPrimitive, Zero};
 use rustc_hash::FxHashMap;
+use std::{hash::Hash, rc::Rc, slice::Iter};
 
 #[macro_export]
 macro_rules! BytesToString {
@@ -132,12 +132,19 @@ macro_rules! impl_enum_is_branch {
     };
 }
 
-pub struct VecMap<T> where T: Clone+Eq+Hash {
-    vec: Vec<Rc<T>>,
-    map: FxHashMap<Rc<T>, usize>,
+#[derive(Debug)]
+pub struct VecMap<T>
+where
+    T: Clone + Eq + Hash,
+{
+    vec: Vec<T>,
+    map: FxHashMap<T, usize>,
 }
 
-impl<T> VecMap<T> where T: Clone+Eq+Hash {
+impl<T> VecMap<T>
+where
+    T: Clone + Eq + Hash,
+{
     pub fn new() -> Self {
         Self {
             vec: Vec::new(),
@@ -145,11 +152,38 @@ impl<T> VecMap<T> where T: Clone+Eq+Hash {
         }
     }
 
-    pub fn insert(&mut self, k: T) {
-        if !self.map.contains_key(&k) {
-            let rc_k = Rc::new(k);
-            self.vec.push(rc_k.clone());
-            self.map.insert(k, self.vec.len() - 1);
+    pub fn with_capacity(c: usize) -> Self {
+        Self {
+            vec: Vec::with_capacity(c),
+            map: FxHashMap::default(),
+        }
+    }
+
+    pub fn push(&mut self, k: &T) {
+        if !self.map.contains_key(k) {
+            self.vec.push(k.clone());
+            self.map.insert(k.clone(), self.vec.len() - 1);
+        }
+    }
+
+    pub fn iter(&self) -> Iter<T> {
+        self.vec.iter()
+    }
+
+    pub fn remove(&mut self, k: &T) {
+        match self.map.remove(k) {
+            Some(idx) => {
+                self.vec.swap_remove(idx);
+                if idx < self.vec.len() {
+                    match self.map.get_mut(&self.vec[idx]) {
+                        Some(n_idx) => {
+                            *n_idx = idx;
+                        }
+                        None => panic!("we should find something"),
+                    }
+                }
+            }
+            None => (),
         }
     }
 }

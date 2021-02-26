@@ -240,7 +240,7 @@ impl Handler {
             cmd,
         );
         let expected_amount_ret = cmd.len();
-
+        assert!(expected_amount_ret > 0);
         let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
         unsafe {
             ret.set_len(expected_amount_ret);
