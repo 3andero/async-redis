@@ -159,10 +159,13 @@ where
         }
     }
 
-    pub fn push(&mut self, k: &T) {
+    pub fn push(&mut self, k: &T) -> bool {
         if !self.map.contains_key(k) {
             self.vec.push(k.clone());
             self.map.insert(k.clone(), self.vec.len() - 1);
+            true
+        } else {
+            false
         }
     }
 

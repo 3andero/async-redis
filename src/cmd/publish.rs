@@ -1,4 +1,9 @@
-use crate::{cmd::*, db::DB};
+use utils::VecMap;
+
+use crate::{
+    cmd::*,
+    db::{SubscriptionSubModule, DB},
+};
 
 #[derive(Debug, Clone)]
 pub struct Publish {
@@ -10,12 +15,14 @@ impl PubSubExecDB for Publish {}
 
 impl Publish {
     pub async fn exec(self, db: &mut DB) -> Frame {
-        if let Some(listeners) = db.subscription.get(&self.key) {
+        if let Some(listeners) = db.subscribe.get_listeners(&self.key) {
             let mut sent = 0;
             for &id in listeners.iter() {
-                if let Some(sender) = db.subscriber.get(&id) {
+                if let Some(sender) = db.subscribe.get_ret_tx(&id) {
                     if sender.send(self.val.clone()).await.is_ok() {
                         sent += 1;
+                    } else {
+                        todo!("drop inactive subscriber")
                     }
                 }
             }
@@ -23,6 +30,21 @@ impl Publish {
         } else {
             Frame::Integers(0)
         }
+    }
+}
+
+impl SubscriptionSubModule {
+    pub fn get_listeners(&self, key: &Bytes) -> Option<&VecMap<u64>> {
+        match self.channels.get(key) {
+            Some(channel_id) => self.subscription.get(channel_id),
+            None => None,
+        }
+    }
+
+    pub fn get_ret_tx(&self, handler_id: &u64) -> Option<&mpsc::Sender<Frame>> {
+        self.subscriber
+            .get(handler_id)
+            .map(|handler_info| &handler_info.0)
     }
 }
 

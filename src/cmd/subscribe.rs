@@ -50,23 +50,60 @@ impl SubscriptionSubModule {
         handler_id: u64,
         ret_tx: Option<mpsc::Sender<Frame>>,
     ) -> Frame {
+        let (_, listening_inner) = self
+            .subscriber
+            .entry(handler_id)
+            .and_modify(|handler_info| {
+                handler_info.1.reserve(keys.len());
+            })
+            .or_insert_with(|| {
+                let new_channels = Vec::with_capacity(keys.len());
+                (ret_tx.unwrap(), new_channels)
+            });
+        let mut listening = Vec::new();
+        std::mem::swap(&mut listening, listening_inner);
+
         for cmd in keys.drain(..) {
             match cmd {
-                MiniCommand::Single(key) => self
-                    .subscription
-                    .entry(key)
-                    .and_modify(|vm| vm.push(&handler_id))
-                    .or_insert_with(|| VecMap::with_capacity(1))
-                    .push(&handler_id),
+                MiniCommand::Single(key) => {
+                    let mut is_new = false;
+                    let channel_id = match self.channels.get(&key) {
+                        Some(id) => *id,
+                        None => {
+                            self.counter += 1;
+                            let cid = self.counter;
+                            is_new = true;
+                            self.channels.insert(key.clone(), cid);
+                            self.channel_info.insert(cid, key);
+                            cid
+                        }
+                    };
+
+                    is_new = if is_new {
+                        let mut new_channel_subscriber = VecMap::with_capacity(1);
+                        new_channel_subscriber.push(&handler_id);
+                        self.subscription.insert(channel_id, new_channel_subscriber);
+                        true
+                    } else {
+                        match self.subscription.get_mut(&channel_id) {
+                            Some(vm) => vm.push(&handler_id),
+                            None => panic!(),
+                        }
+                    };
+
+                    if is_new {
+                        listening.push(channel_id);
+                    }
+                }
                 _ => panic!(),
             }
         }
 
-        match ret_tx {
-            Some(s) => {
-                self.subscriber.insert(handler_id, (s, Vec::new()));
+        match self.subscriber.get_mut(&handler_id) {
+            Some((_, listening_inner)) => {
+                std::mem::swap(listening_inner, &mut listening);
             }
-            None => (),
+            _ => panic!(),
         }
         Frame::Ok
     }
