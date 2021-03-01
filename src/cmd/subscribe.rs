@@ -6,7 +6,7 @@ use traverse_command::*;
 
 #[derive(Debug, Clone)]
 pub struct Subscribe {
-    pairs: Vec<MiniCommand>,
+    cmds: Vec<MiniCommand>,
     handler_id: u64,
     ret_tx: Option<mpsc::Sender<Frame>>,
 }
@@ -30,7 +30,7 @@ impl PubSubExecDB for Subscribe {
 impl Subscribe {
     pub fn new(value: (Vec<MiniCommand>, Option<mpsc::Sender<Frame>>, u64)) -> Self {
         Self {
-            pairs: value.0,
+            cmds: value.0,
             handler_id: value.2,
             ret_tx: value.1,
         }
@@ -38,7 +38,7 @@ impl Subscribe {
 
     pub fn exec(mut self, db: &mut DB) -> Frame {
         db.subscribe
-            .subscribe(&mut self.pairs, self.handler_id, self.ret_tx);
+            .subscribe(&mut self.cmds, self.handler_id, self.ret_tx);
         Frame::Ok
     }
 }
@@ -56,11 +56,8 @@ impl SubscriptionSubModule {
             .and_modify(|handler_info| {
                 handler_info.1.reserve(keys.len());
             })
-            .or_insert_with(|| {
-                let new_channels = Vec::with_capacity(keys.len());
-                (ret_tx.unwrap(), new_channels)
-            });
-        let mut listening = Vec::new();
+            .or_insert_with(|| (ret_tx.unwrap(), VecMap::with_capacity(keys.len())));
+        let mut listening = VecMap::new();
         std::mem::swap(&mut listening, listening_inner);
 
         for cmd in keys.drain(..) {
@@ -92,7 +89,7 @@ impl SubscriptionSubModule {
                     };
 
                     if is_new {
-                        listening.push(channel_id);
+                        listening.push(&channel_id);
                     }
                 }
                 _ => panic!(),
@@ -129,7 +126,7 @@ macro_rules! pop_ret_id {
 
 impl_traverse_command!(
     SendNReturn1,
-    KeyOnly,
+    (Key)+,
     SubscribeDispatcher,
     Subscribe,
     PubSubCommand,

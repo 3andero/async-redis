@@ -29,7 +29,8 @@ pub fn define_traverse_command(args: TokenStream, input: TokenStream) -> TokenSt
                     db_amount: usize,
                     cmds: Vec<MiniCommand>,
                     cmds_tbl: Vec<Vec<MiniCommand>>,
-                    len: usize
+                    len: usize,
+                    has_operand: bool
                 );
             }
             b"n:n" => {
@@ -39,7 +40,8 @@ pub fn define_traverse_command(args: TokenStream, input: TokenStream) -> TokenSt
                     cmds: Vec<MiniCommand>,
                     cmds_tbl: Vec<Vec<MiniCommand>>,
                     order_tbl: Vec<Vec<usize>>,
-                    len: usize
+                    len: usize,
+                    has_operand: bool
                 );
             }
             _ => panic!(),

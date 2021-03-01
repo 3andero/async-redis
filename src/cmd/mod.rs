@@ -9,6 +9,7 @@ pub mod publish;
 pub mod set;
 pub mod subscribe;
 pub mod traverse_command;
+pub mod unsubscribe;
 
 use command_parser::*;
 use command_table::*;
@@ -21,6 +22,7 @@ use publish::*;
 use set::*;
 use subscribe::*;
 use traverse_command::*;
+use unsubscribe::*;
 
 use anyhow::{Error, Result};
 use std::slice::Iter;
@@ -55,6 +57,7 @@ pub enum OneshotCommand {
 pub enum PubSubCommand {
     Subscribe,
     Publish,
+    Unsubscribe,
 }
 
 #[enum_dispatch(PubSubCommand)]

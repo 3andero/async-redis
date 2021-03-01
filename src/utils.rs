@@ -153,10 +153,21 @@ where
     }
 
     pub fn with_capacity(c: usize) -> Self {
+        let mut map = FxHashMap::default();
+        map.reserve(c);
         Self {
             vec: Vec::with_capacity(c),
-            map: FxHashMap::default(),
+            map,
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.vec.len()
+    }
+
+    pub fn reserve(&mut self, c: usize) {
+        self.vec.reserve(c);
+        self.map.reserve(c);
     }
 
     pub fn push(&mut self, k: &T) -> bool {
@@ -173,7 +184,7 @@ where
         self.vec.iter()
     }
 
-    pub fn remove(&mut self, k: &T) {
+    pub fn remove(&mut self, k: &T) -> bool {
         match self.map.remove(k) {
             Some(idx) => {
                 self.vec.swap_remove(idx);
@@ -185,8 +196,9 @@ where
                         None => panic!("we should find something"),
                     }
                 }
+                true
             }
-            None => (),
+            None => false,
         }
     }
 }

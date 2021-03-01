@@ -3,20 +3,20 @@ use async_redis::*;
 
 #[derive(Debug, Clone)]
 pub struct MSet {
-    pairs: Vec<MiniCommand>,
+    cmds: Vec<MiniCommand>,
 }
 
 impl MSet {
-    pub fn new(pairs: Vec<MiniCommand>) -> Self {
-        Self { pairs }
+    pub fn new(cmds: Vec<MiniCommand>) -> Self {
+        Self { cmds }
     }
 }
 
 impl OneshotExecDB for MSet {
     fn exec(self, db: &mut DB) -> Frame {
         let nounce0 = db.counter;
-        db.counter += self.pairs.len() as u64;
-        self.pairs.into_iter().fold(nounce0 + 1, |i, cmd| {
+        db.counter += self.cmds.len() as u64;
+        self.cmds.into_iter().fold(nounce0 + 1, |i, cmd| {
             if let MiniCommand::Pair((k, v)) = cmd {
                 db.set_lite(k, v, i, None);
             }
@@ -26,7 +26,7 @@ impl OneshotExecDB for MSet {
     }
 
     fn get_key(&self) -> &[u8] {
-        &self.pairs[0].get_key()
+        &self.cmds[0].get_key()
     }
 }
 
@@ -34,4 +34,10 @@ impl OneshotExecDB for MSet {
 #[derive(Debug, Clone, Default)]
 pub struct MSetDispatcher {}
 
-impl_traverse_command!(SendNReturn1, KeyValue, MSetDispatcher, MSet, OneshotCommand);
+impl_traverse_command!(
+    SendNReturn1,
+    (KeyValue)+,
+    MSetDispatcher,
+    MSet,
+    OneshotCommand
+);

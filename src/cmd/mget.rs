@@ -36,4 +36,4 @@ impl OneshotExecDB for MGet {
 #[derive(Debug, Clone, Default)]
 pub struct MGetDispatcher {}
 
-impl_traverse_command!(SendNReturnN, KeyOnly, MGetDispatcher, MGet, OneshotCommand);
+impl_traverse_command!(SendNReturnN, (Key)+, MGetDispatcher, MGet, OneshotCommand);

@@ -66,7 +66,7 @@ pub struct SubscriptionSubModule {
     pub channels: FxHashMap<Bytes, usize>,
     pub channel_info: FxHashMap<usize, Bytes>,
     pub subscription: FxHashMap<usize, VecMap<u64>>,
-    pub subscriber: FxHashMap<u64, (mpsc::Sender<Frame>, Vec<usize>)>,
+    pub subscriber: FxHashMap<u64, (mpsc::Sender<Frame>, VecMap<usize>)>,
 }
 
 impl SubscriptionSubModule {
@@ -175,6 +175,9 @@ pub async fn database_manager(
                         }
                         PubSubCommand::Publish(_cmd) => {
                             let _ = ret_tx.send(_cmd.exec(&mut db).await);
+                        }
+                        PubSubCommand::Unsubscribe(_cmd) => {
+                            todo!()
                         }
                     },
                 };

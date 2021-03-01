@@ -103,6 +103,7 @@ macro_rules! new_traverse_command {
             db_amount: 0,
             cmds_tbl: Vec::new(),
             len: $len,
+            has_operand: $len > 0,
             ..Default::default()
         })
     };
@@ -113,38 +114,40 @@ macro_rules! new_traverse_command {
             cmds_tbl: Vec::new(),
             order_tbl: Vec::new(),
             len: $len,
+            has_operand: $len > 0,
             ..Default::default()
         })
     };
-    (KeyValue, $type:ident, $target:ident) => {
+    (@EmptyGuard, +, $len:ident) => {
+        if $len == 0 {
+            return Err(Error::new(CommandError::MissingOperand));
+        }
+    };
+    (@EmptyGuard, *, $len:ident) => {};
+    (KeyValue$allow_empty:tt, $type:ident, $target:ident) => {
         impl $target {
             pub fn new(parser: &mut CommandParser) -> Result<$target> {
                 let len = parser.len() / 2;
-                if len == 0 {
-                    return Err(Error::new(CommandError::MissingOperand));
-                }
+                new_traverse_command!(@EmptyGuard, $allow_empty, len);
                 let mut cmds = Vec::with_capacity(len);
                 while let Some(p) = parser.next_kv_pair()? {
                     cmds.push(p.into());
                 }
 
-                new_traverse_command!(@Construct ,$type, cmds, len)
+                new_traverse_command!(@Construct, $type, cmds, len)
             }
         }
     };
-    (KeyOnly, $type:ident, $target:ident) => {
+    (Key$allow_empty:tt, $type:ident, $target:ident) => {
         impl $target {
             pub fn new(parser: &mut CommandParser) -> Result<$target> {
-                if parser.len() == 0 {
-                    return Err(Error::new(CommandError::MissingOperand));
-                }
-                let mut cmds = Vec::with_capacity(parser.len());
+                let len = parser.len();
+                new_traverse_command!(@EmptyGuard, $allow_empty, len);
+                let mut cmds = Vec::with_capacity(len);
                 while let Some(p) = parser.next_bytes()? {
                     cmds.push(p.into());
                 }
-                let len = cmds.len();
-
-                new_traverse_command!(@Construct ,$type, cmds, len)
+                new_traverse_command!(@Construct, $type, cmds, len)
             }
         }
     };
@@ -168,16 +171,16 @@ macro_rules! impl_traverse_command {
         }
     };
 
-    (SendNReturn1, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident, $atomic_type:ident) => {
-        impl_traverse_command!(SendNReturn1, $mini_command_type, $target, $corresponding_cmd, $atomic_type, default_pop);
+    (SendNReturn1, ($mini_command_type:ident)$allow_empty:tt, $target:ident, $corresponding_cmd:ident, $atomic_type:ident) => {
+        impl_traverse_command!(SendNReturn1, ($mini_command_type)$allow_empty, $target, $corresponding_cmd, $atomic_type, default_pop);
     };
-    (SendNReturnN, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident, $atomic_type:ident) => {
-        impl_traverse_command!(SendNReturnN, $mini_command_type, $target, $corresponding_cmd, $atomic_type, default_pop);
+    (SendNReturnN, ($mini_command_type:ident)$allow_empty:tt, $target:ident, $corresponding_cmd:ident, $atomic_type:ident) => {
+        impl_traverse_command!(SendNReturnN, ($mini_command_type)$allow_empty, $target, $corresponding_cmd, $atomic_type, default_pop);
     };
 
-    (SendNReturn1, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
+    (SendNReturn1, ($mini_command_type:ident)$allow_empty:tt, $target:ident, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
 
-        crate::new_traverse_command!($mini_command_type, SendNReturn1, $target);
+        crate::new_traverse_command!($mini_command_type$allow_empty, SendNReturn1, $target);
 
         impl DispatchToMultipleDB for $target {
             impl_traverse_command!(@Consts, $corresponding_cmd, $atomic_type, $pop);
@@ -210,9 +213,9 @@ macro_rules! impl_traverse_command {
         }
     };
 
-    (SendNReturnN, $mini_command_type:ident, $target:ident, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
+    (SendNReturnN, ($mini_command_type:ident)$allow_empty:tt, $target:ident, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
 
-        crate::new_traverse_command!($mini_command_type, SendNReturnN, $target);
+        crate::new_traverse_command!($mini_command_type$allow_empty, SendNReturnN, $target);
 
         impl DispatchToMultipleDB for $target {
             impl_traverse_command!(@Consts, $corresponding_cmd, $atomic_type, $pop);
