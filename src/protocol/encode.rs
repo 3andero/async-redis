@@ -87,7 +87,7 @@ fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
         Frame::Ok => {
             buf.put_slice(OK_FRAME);
         }
-        Frame::_DetachSubscribeMode => panic!(),
+        Frame::_DetachSubscribeMode(_) => panic!(),
     };
 }
 

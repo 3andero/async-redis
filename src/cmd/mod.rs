@@ -61,16 +61,7 @@ pub enum PubSubCommand {
 }
 
 #[enum_dispatch(PubSubCommand)]
-pub trait PubSubExecDB {
-    fn set_extra_info(&mut self, _extra: ExtraInfo) {}
-    fn need_extra_info(&self) -> bool {
-        false
-    }
-}
-
-pub enum ExtraInfo {
-    SubscribeInfo((u64, Option<mpsc::Sender<Frame>>)),
-}
+pub trait PubSubExecDB {}
 
 #[enum_dispatch(OneshotCommand)]
 pub trait OneshotExecDB {
@@ -83,9 +74,11 @@ pub trait OneshotExecDB {
 pub enum HoldOnCommand {
     Subscribe(SubscribeDispatcher),
     Publish(PublishDispatcher),
+    Unsubscribe(UnsubDispatcher),
 }
 
 crate::impl_enum_is_branch!(HoldOnCommand, need_subscribe, (Subscribe, x));
+crate::impl_enum_is_branch!(HoldOnCommand, is_unsubscribe, (Unsubscribe, x));
 
 #[enum_dispatch]
 pub trait InitSubscription {
@@ -201,6 +194,7 @@ impl Command {
             SHUTDOWN => Ok(Oneshot(Dx::new(DxCommand::Shutdown).into())),
             SUBSCRIBE => Ok(HoldOn(SubscribeDispatcher::new(&mut parser)?.into())),
             PUBLISH => Ok(HoldOn(PublishDispatcher::new(&mut parser)?.into())),
+            UNSUBSCRIBE => Ok(HoldOn(UnsubDispatcher::new(&mut parser)?.into())),
             UNIMPLEMENTED => Err(Error::new(CommandError::NotImplemented)),
         }
     }

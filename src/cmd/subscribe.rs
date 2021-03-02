@@ -11,21 +11,7 @@ pub struct Subscribe {
     ret_tx: Option<mpsc::Sender<Frame>>,
 }
 
-impl PubSubExecDB for Subscribe {
-    fn set_extra_info(&mut self, extra: ExtraInfo) {
-        use ExtraInfo::*;
-        match extra {
-            SubscribeInfo((id, ret_tx)) => {
-                self.handler_id = id;
-                self.ret_tx = ret_tx;
-            }
-        }
-    }
-
-    fn need_extra_info(&self) -> bool {
-        true
-    }
-}
+impl PubSubExecDB for Subscribe {}
 
 impl Subscribe {
     pub fn new(value: (Vec<MiniCommand>, Option<mpsc::Sender<Frame>>, u64)) -> Self {

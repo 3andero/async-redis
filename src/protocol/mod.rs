@@ -29,7 +29,7 @@ pub enum Frame {
     Arrays(Vec<Frame>),
     Ok,
     NullArray,
-    _DetachSubscribeMode,
+    _DetachSubscribeMode(usize),
 }
 
 impl From<Bytes> for Frame {
@@ -65,7 +65,7 @@ impl Frame {
             Frame::BulkStrings(v) => 5 + v.len() + len_of(v.len()),
             &Frame::Integers(v) => len_of(v) + 3,
             Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.raw_bytes_len()),
-            _DetachSubscribeMode => panic!(),
+            Frame::_DetachSubscribeMode(_) => panic!(),
         }
     }
 
@@ -83,7 +83,7 @@ impl Frame {
             Arrays(v) => v.iter().fold(0, |r, f| r + f.encode_msg_len()),
             Integers(_) => 0,
             // internal use only, should never be encoded.
-            _DetachSubscribeMode => panic!(),
+            _DetachSubscribeMode(_) => panic!(),
         }
     }
 
@@ -101,7 +101,7 @@ impl Frame {
             Arrays(v) => v.iter().fold(0, |r, f| r + f.msg_num()),
             Integers(_) => 0,
             // internal use only, should never be encoded.
-            _DetachSubscribeMode => panic!(),
+            _DetachSubscribeMode(_) => panic!(),
         }
     }
 
@@ -113,7 +113,7 @@ impl Frame {
             Arrays(v) => v.len(),
             Integers(_) => 0,
             // internal use only, should never be encoded.
-            _DetachSubscribeMode => panic!(),
+            _DetachSubscribeMode(_) => panic!(),
         }
     }
 }

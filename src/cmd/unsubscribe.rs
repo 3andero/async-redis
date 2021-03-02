@@ -14,8 +14,10 @@ pub struct Unsubscribe {
 impl PubSubExecDB for Unsubscribe {}
 
 impl Unsubscribe {
-    pub async fn exec(self, db: &mut DB) -> Frame {
-        todo!()
+    pub async fn exec(mut self, db: &mut DB) -> Frame {
+        db.subscribe
+            .unsubscribe(&mut self.cmds, self.handler_id, db.id)
+            .await
     }
 }
 
@@ -35,6 +37,7 @@ impl SubscriptionSubModule {
         &mut self,
         keys: &mut Option<Vec<MiniCommand>>,
         handler_id: u64,
+        db_id: usize,
     ) -> Frame {
         match keys {
             None => {
@@ -43,7 +46,9 @@ impl SubscriptionSubModule {
                 for channel_id in subscribed_channel.iter() {
                     self.remove_subscriber(channel_id, &handler_id);
                 }
-                let _ = subscriber_ret_tx.send(Frame::_DetachSubscribeMode).await;
+                let _ = subscriber_ret_tx
+                    .send(Frame::_DetachSubscribeMode(db_id))
+                    .await;
             }
             Some(cmd_arr) => {
                 let (subscriber_ret_tx, subscribed_channel) =
@@ -67,7 +72,9 @@ impl SubscriptionSubModule {
                     }
                 }
                 if subscribed_channel.len() == 0 {
-                    let _ = subscriber_ret_tx.send(Frame::_DetachSubscribeMode).await;
+                    let _ = subscriber_ret_tx
+                        .send(Frame::_DetachSubscribeMode(db_id))
+                        .await;
                     let _ = self.subscriber.remove(&handler_id).unwrap();
                 }
                 for channel_id in channel_id_to_remove.iter() {
@@ -133,5 +140,16 @@ impl InitSubscription for UnsubDispatcher {
     ) {
         self.handler_id = handler_id;
         self.sub_state = sub_state.clone();
+    }
+}
+
+impl UnsubDispatcher {
+    pub fn unsubscribe_all(handler_id: u64, sub_state: Vec<bool>) -> HoldOnCommand {
+        Self {
+            handler_id,
+            sub_state,
+            ..Default::default()
+        }
+        .into()
     }
 }

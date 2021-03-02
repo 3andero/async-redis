@@ -13,8 +13,8 @@ use tokio::{net::TcpListener, spawn, sync::*};
 use tracing::*;
 
 use crate::{
-    cmd::traverse_command::*, cmd::*, connection::*, db::*, protocol::Frame, shutdown::Shutdown,
-    Result,
+    cmd::traverse_command::*, cmd::unsubscribe::UnsubDispatcher, cmd::*, connection::*, db::*,
+    protocol::Frame, shutdown::Shutdown, Result,
 };
 
 const BUFSIZE: usize = 50;
@@ -228,7 +228,7 @@ enum CommandConvert {
 }
 
 impl Handler {
-    async fn traverse_exec<T>(&mut self, cmd: &mut T, into_task: CommandConvert) -> Result<Frame>
+    async fn traverse_exec<T>(&self, cmd: &mut T, into_task: CommandConvert) -> Result<Frame>
     where
         T: DispatchToMultipleDB + std::fmt::Debug,
     {
@@ -339,14 +339,18 @@ impl Handler {
                     }
                 },
                 Ok(Command::HoldOn(mut cmd)) => {
-                    cmd.dispatch(self.thread_num, |key: &[u8]| {
-                        self.dispatcher.determine_database(key)
-                    });
-                    if !cmd.need_subscribe() {
-                        self.traverse_exec(&mut cmd, CommandConvert::PubSub).await?
+                    if cmd.is_unsubscribe() {
+                        Frame::Errors(Bytes::from_static(b"nothing to unsubscribe"))
                     } else {
-                        self.handle_hold_on_cmd(&mut cmd).await?;
-                        continue;
+                        cmd.dispatch(self.thread_num, |key: &[u8]| {
+                            self.dispatcher.determine_database(key)
+                        });
+                        if !cmd.need_subscribe() {
+                            self.traverse_exec(&mut cmd, CommandConvert::PubSub).await?
+                        } else {
+                            self.handle_hold_on_cmd(&mut cmd).await?;
+                            continue;
+                        }
                     }
                 }
             };
@@ -361,6 +365,13 @@ impl Handler {
         Ok(())
     }
 
+    async fn unsubscribe_all(&self, sub_state: Vec<bool>) {
+        let mut unsub_all = UnsubDispatcher::unsubscribe_all(self.id, sub_state);
+        let _ = self
+            .traverse_exec(&mut unsub_all, CommandConvert::PubSub)
+            .await;
+    }
+
     async fn handle_hold_on_cmd(&mut self, cmd: &mut HoldOnCommand) -> Result<()> {
         trace!(
             "[{}]<{}>enter handle_hold_on_cmd",
@@ -369,6 +380,7 @@ impl Handler {
         );
         let (ret_tx, mut ret_rx) = mpsc::channel(BUFSIZE);
         let mut sub_state = vec![false; self.thread_num];
+
         cmd.set_subscription(&mut sub_state, &ret_tx, self.id);
         let ret_frame = self.traverse_exec(cmd, CommandConvert::PubSub).await?;
         self.connection.write_frame(&ret_frame).await?;
@@ -382,6 +394,7 @@ impl Handler {
                     match res? {
                         Some(f) => f,
                         None => {
+                            self.unsubscribe_all(sub_state).await;
                             return Ok(());
                         }
                     }
@@ -389,8 +402,12 @@ impl Handler {
                 maybe_update = ret_rx.recv() => {
                     if let Some(update) = maybe_update {
                         match update {
-                            Frame::_DetachSubscribeMode => {
-                                return Ok(());
+                            Frame::_DetachSubscribeMode(db_id) => {
+                                sub_state[db_id] = false;
+                                if !sub_state.contains(&true) {
+                                    return Ok(());
+                                }
+                                continue;
                             }
                             v => {
                                 self.connection.write_frame(&v).await?;
