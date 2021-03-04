@@ -3,7 +3,7 @@ use anyhow::{anyhow, Error};
 use bytes::Bytes;
 use num_traits::{FromPrimitive, PrimInt, ToPrimitive, Zero};
 use rustc_hash::FxHashMap;
-use std::{hash::Hash, rc::Rc, slice::Iter};
+use std::{hash::Hash, slice::Iter};
 
 #[macro_export]
 macro_rules! BytesToString {
@@ -108,7 +108,6 @@ pub fn rolling_hash(arr: &[u8]) -> Result<usize> {
     }
     Ok(res)
 }
-#[macro_use]
 #[macro_export]
 macro_rules! impl_enum_is_branch {
     (@branch, $target:ident, $true_branch:ident) => {

@@ -100,8 +100,6 @@ macro_rules! new_traverse_command {
     (@Construct, SendNReturn1, $cmds:ident, $len:ident) => {
         Ok(Self {
             cmds: $cmds,
-            db_amount: 0,
-            cmds_tbl: Vec::new(),
             len: $len,
             has_operand: $len > 0,
             ..Default::default()
@@ -110,9 +108,6 @@ macro_rules! new_traverse_command {
     (@Construct, SendNReturnN, $cmds:ident, $len:ident) => {
         Ok(Self {
             cmds: $cmds,
-            db_amount: 0,
-            cmds_tbl: Vec::new(),
-            order_tbl: Vec::new(),
             len: $len,
             has_operand: $len > 0,
             ..Default::default()
@@ -155,15 +150,20 @@ macro_rules! new_traverse_command {
 
 #[macro_export]
 macro_rules! default_pop {
-    ($self:ident) => {
+    ($self:ident) => {{
+        assert!(
+            $self.cmds_tbl.len() > 0,
+            "self.cmds_tbl was not properly initialized"
+        );
         $self.cmds_tbl.pop().filter(|v| v.len() > 0)
-    };
+    }};
 }
 
 #[macro_export]
 macro_rules! impl_traverse_command {
     (@Consts, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
         fn next_command(&mut self) -> IDCommandPair {
+            assert!(self.db_amount > 0, "self.db_amount was not properly initialized");
             self.db_amount -= 1;
             let cmd = $pop!(self)
                 .map(|v| $atomic_type::from($corresponding_cmd::new(v))).into();
@@ -222,6 +222,8 @@ macro_rules! impl_traverse_command {
             impl_traverse_command!(@Consts, $corresponding_cmd, $atomic_type, $pop);
 
             fn get_result_collector(&mut self) -> ResultCollector {
+                assert!(self.db_amount > 0, "self.db_amount should not be 0");
+                assert!(self.order_tbl.len() == self.db_amount, "self.order_tbl.len() should not be 0");
                 ResultCollector::Reorder(std::mem::take(&mut self.order_tbl))
             }
 

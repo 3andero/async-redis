@@ -175,42 +175,6 @@ impl Listener {
     }
 }
 
-#[macro_use]
-macro_rules! traverse {
-    ($(use $($dependency:ident),*;)?
-     for ($db_id:ident, $atomic_cmd:ident) in $cmd:ident do $do:block then send as $tasktype:ident by $self:ident) => {{
-        $cmd.dispatch($self.thread_num, |key: &[u8]| {
-            $self.dispatcher.determine_database(key)
-        });
-        let expected_amount_ret = $cmd.len();
-
-        let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
-        unsafe {
-            ret.set_len(expected_amount_ret);
-        }
-
-        let mut result_collector = $cmd.get_result_collector();
-
-        for _ in 0..$self.thread_num {
-            let ($db_id, $atomic_cmd) = $cmd.next_command();
-            if $atomic_cmd.is_none() {
-                continue;
-            }
-            let (ret_tx, ret_rx) = oneshot::channel();
-            let cmd_copy = $do;
-            $self.dispatcher.tasks_tx[$db_id].send(TaskParam::$tasktype((cmd_copy, ret_tx)))?;
-
-            result_collector.merge(&mut ret, ret_rx).await?;
-        }
-
-        if ret.len() == 1 {
-            ret.pop().unwrap()
-        } else {
-            Frame::Arrays(ret)
-        }
-    }};
-}
-
 #[derive(Debug)]
 struct Handler {
     connection: Connection,

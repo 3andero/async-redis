@@ -1,7 +1,6 @@
 use super::MiniCommand;
-use crate::{cmd::*, db::SubscriptionSubModule, protocol::Frame, utils::VecMap, *};
+use crate::{cmd::*, db::SubscriptionSubModule, protocol::Frame, *};
 use async_redis::*;
-use rustc_hash::FxHashMap;
 use tokio::sync::mpsc;
 use traverse_command::*;
 
@@ -105,6 +104,10 @@ pub struct UnsubDispatcher {
 #[macro_export]
 macro_rules! pop_unsub_chan {
     ($self:ident) => {{
+        assert!(
+            $self.sub_state.len() > 0,
+            "self.sub_state wasn't properly initialized"
+        );
         let state = $self.sub_state.pop().unwrap();
         if !$self.has_operand {
             if state {
@@ -113,6 +116,10 @@ macro_rules! pop_unsub_chan {
                 None
             }
         } else {
+            assert!(
+                $self.cmds_tbl.len() > 0,
+                "self.cmds_tbl wasn't properly initialized"
+            );
             $self
                 .cmds_tbl
                 .pop()

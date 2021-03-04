@@ -1,5 +1,3 @@
-use std::unimplemented;
-
 use crate::cmd::*;
 use anyhow::Result;
 

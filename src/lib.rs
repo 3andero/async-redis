@@ -1,7 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::parse::Parser;
-use syn::{parse, parse_macro_input, ItemStruct};
+use syn::{parse::Parser, parse_macro_input, ItemStruct};
 
 macro_rules! vector_push {
     ($fields:ident, $($name:ident: $type:ty),*) => {

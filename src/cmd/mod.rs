@@ -25,7 +25,6 @@ use traverse_command::*;
 use unsubscribe::*;
 
 use anyhow::{Error, Result};
-use std::slice::Iter;
 use tokio::sync::{mpsc, oneshot};
 use utils::{rolling_hash, rolling_hash_const};
 

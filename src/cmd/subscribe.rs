@@ -101,6 +101,11 @@ pub struct SubscribeDispatcher {
 #[macro_export]
 macro_rules! pop_ret_id {
     ($self:ident) => {{
+        assert!($self.ret_txs.len() > 0, "set_subscription was not executed");
+        assert!(
+            $self.cmds_tbl.len() > 0,
+            "self.cmds_tbl was not properly initialized"
+        );
         let ret_tx = $self.ret_txs.pop().unwrap();
         $self
             .cmds_tbl
@@ -126,6 +131,10 @@ impl InitSubscription for SubscribeDispatcher {
         ret_tx: &mpsc::Sender<Frame>,
         handler_id: u64,
     ) {
+        assert!(
+            self.cmds_tbl.len() > 0,
+            "self.cmds_tbl was not properly initialized"
+        );
         self.ret_txs = self
             .cmds_tbl
             .iter()
