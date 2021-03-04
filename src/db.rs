@@ -169,23 +169,27 @@ pub async fn database_manager(
                         trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
                         let _ = ret_tx.send(cmd.exec(&mut db));
                     },
-                    TaskParam::PubSubTask((cmd, ret_tx)) => match cmd {
-                        PubSubCommand::Subscribe(_cmd) => {
-                            let _ = ret_tx.send(_cmd.exec(&mut db));
+                    TaskParam::PubSubTask((cmd, ret_tx)) => {
+                        trace!("db before: {:?}", db);
+                        match cmd {
+                            PubSubCommand::Subscribe(_cmd) => {
+                                let _ = ret_tx.send(_cmd.exec(&mut db));
+                            }
+                            PubSubCommand::Publish(_cmd) => {
+                                let _ = ret_tx.send(_cmd.exec(&mut db).await);
+                            }
+                            PubSubCommand::Unsubscribe(_cmd) => {
+                                let _ = ret_tx.send(_cmd.exec(&mut db).await);
+                            }
                         }
-                        PubSubCommand::Publish(_cmd) => {
-                            let _ = ret_tx.send(_cmd.exec(&mut db).await);
-                        }
-                        PubSubCommand::Unsubscribe(_cmd) => {
-                            todo!()
-                        }
-                    },
+                        trace!("db after: {:?}", db);
+                    }
                 };
 
             }
             _ = tokio::time::sleep_until(
-                when.map(|v| v.max(now + Duration::new(10, 0)))
-                    .unwrap_or(now + Duration::new(30, 0)),
+                when.map(|v| v.max(now + Duration::new(1000, 0)))
+                    .unwrap_or(now + Duration::new(3000, 0)),
             ) => {
                 debug!("[{}] task waked up, expirations: {:?}", taskid, db.expiration);
                 when = None;

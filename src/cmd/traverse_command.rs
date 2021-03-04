@@ -164,10 +164,10 @@ macro_rules! default_pop {
 macro_rules! impl_traverse_command {
     (@Consts, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
         fn next_command(&mut self) -> IDCommandPair {
-            let id = self.cmds_tbl.len() - 1;
+            self.db_amount -= 1;
             let cmd = $pop!(self)
                 .map(|v| $atomic_type::from($corresponding_cmd::new(v))).into();
-            (id, cmd)
+            (self.db_amount, cmd)
         }
     };
 
@@ -194,6 +194,7 @@ macro_rules! impl_traverse_command {
             }
 
             fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
+                self.db_amount = db_amount;
                 let mut tbl_len = vec![0; db_amount];
                 let mut db_ids: Vec<usize> = self
                     .cmds.iter()
@@ -229,6 +230,7 @@ macro_rules! impl_traverse_command {
             }
 
             fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
+                self.db_amount = db_amount;
                 let mut tbl_len = vec![0; db_amount];
                 let mut db_ids: Vec<usize> = self
                     .cmds.iter()

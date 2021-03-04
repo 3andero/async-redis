@@ -77,7 +77,12 @@ pub enum HoldOnCommand {
     Unsubscribe(UnsubDispatcher),
 }
 
-crate::impl_enum_is_branch!(HoldOnCommand, need_subscribe, (Subscribe, x));
+crate::impl_enum_is_branch!(
+    HoldOnCommand,
+    need_subscribe,
+    (Subscribe, x),
+    (Unsubscribe, x)
+);
 crate::impl_enum_is_branch!(HoldOnCommand, is_unsubscribe, (Unsubscribe, x));
 
 #[enum_dispatch]

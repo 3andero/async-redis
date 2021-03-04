@@ -144,10 +144,15 @@ impl InitSubscription for UnsubDispatcher {
 }
 
 impl UnsubDispatcher {
-    pub fn unsubscribe_all(handler_id: u64, sub_state: Vec<bool>) -> HoldOnCommand {
+    pub fn unsubscribe_all(
+        handler_id: u64,
+        sub_state: Vec<bool>,
+        db_amount: usize,
+    ) -> HoldOnCommand {
         Self {
             handler_id,
             sub_state,
+            db_amount,
             ..Default::default()
         }
         .into()

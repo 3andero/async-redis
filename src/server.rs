@@ -348,7 +348,14 @@ impl Handler {
                         if !cmd.need_subscribe() {
                             self.traverse_exec(&mut cmd, CommandConvert::PubSub).await?
                         } else {
-                            self.handle_hold_on_cmd(&mut cmd).await?;
+                            let mut sub_state = vec![false; self.thread_num];
+                            match self.handle_hold_on_cmd(&mut cmd, &mut sub_state).await {
+                                Ok(_) => self.unsubscribe_all(sub_state).await,
+                                Err(e) => {
+                                    self.unsubscribe_all(sub_state).await;
+                                    return Err(e);
+                                }
+                            }
                             continue;
                         }
                     }
@@ -366,22 +373,25 @@ impl Handler {
     }
 
     async fn unsubscribe_all(&self, sub_state: Vec<bool>) {
-        let mut unsub_all = UnsubDispatcher::unsubscribe_all(self.id, sub_state);
+        let mut unsub_all = UnsubDispatcher::unsubscribe_all(self.id, sub_state, self.thread_num);
         let _ = self
             .traverse_exec(&mut unsub_all, CommandConvert::PubSub)
             .await;
     }
 
-    async fn handle_hold_on_cmd(&mut self, cmd: &mut HoldOnCommand) -> Result<()> {
+    async fn handle_hold_on_cmd(
+        &mut self,
+        cmd: &mut HoldOnCommand,
+        sub_state: &mut Vec<bool>,
+    ) -> Result<()> {
         trace!(
             "[{}]<{}>enter handle_hold_on_cmd",
             self.id,
             self.connection.id
         );
         let (ret_tx, mut ret_rx) = mpsc::channel(BUFSIZE);
-        let mut sub_state = vec![false; self.thread_num];
 
-        cmd.set_subscription(&mut sub_state, &ret_tx, self.id);
+        cmd.set_subscription(sub_state, &ret_tx, self.id);
         let ret_frame = self.traverse_exec(cmd, CommandConvert::PubSub).await?;
         self.connection.write_frame(&ret_frame).await?;
 
@@ -394,7 +404,6 @@ impl Handler {
                     match res? {
                         Some(f) => f,
                         None => {
-                            self.unsubscribe_all(sub_state).await;
                             return Ok(());
                         }
                     }
@@ -439,7 +448,7 @@ impl Handler {
                         self.dispatcher.determine_database(key)
                     });
                     if cmd.need_subscribe() {
-                        cmd.set_subscription(&mut sub_state, &ret_tx, self.id);
+                        cmd.set_subscription(sub_state, &ret_tx, self.id);
                     }
                     self.traverse_exec(&mut cmd, CommandConvert::PubSub).await?
                 }
