@@ -116,15 +116,16 @@ macro_rules! impl_enum_is_branch {
     (@branch, $target:ident, $true_branch:ident, $x:ident) => {
         $target::$true_branch(_)
     };
-    ($target:ident, $fn_name:ident, $(($($true_branch:ident),*)),*) => {
+    ($target:ident, $fn_name:ident, $(($($true_branch:ident),*))|* => True, $(($($false_branch:ident),*))|* => False) => {
         impl $target {
             pub fn $fn_name(&self) -> bool {
                 match self {
                     $(
-                        // $target::$true_branch(_) => true,
                         crate::impl_enum_is_branch!(@branch, $target, $($true_branch),*) => true,
                     )*
-                    _ => false,
+                    $(
+                        crate::impl_enum_is_branch!(@branch, $target, $($false_branch),*) => false,
+                    )*
                 }
             }
         }

@@ -79,46 +79,67 @@ pub enum HoldOnCommand {
 crate::impl_enum_is_branch!(
     HoldOnCommand,
     need_subscribe,
-    (Subscribe, x),
-    (Unsubscribe, x)
+    (Subscribe, x) | (Unsubscribe, x) => True,
+    (Publish, x) => False
 );
-crate::impl_enum_is_branch!(HoldOnCommand, is_unsubscribe, (Unsubscribe, x));
+
+crate::impl_enum_is_branch!(
+    HoldOnCommand,
+    is_unsubscribe,
+    (Unsubscribe, x) => True,
+    (Subscribe, x) | (Publish, x) => False
+);
 
 #[enum_dispatch]
 pub trait InitSubscription {
     fn set_subscription(
         &mut self,
-        _sub_state: &mut Vec<bool>,
-        _ret_tx: &mpsc::Sender<Frame>,
-        _handler_id: u64,
-    ) {
-    }
+        sub_state: &mut Vec<bool>,
+        ret_tx: &mpsc::Sender<Frame>,
+        handler_id: u64,
+    );
 }
 
-pub enum ResultCollector {
+pub struct ResultCollector {
+    pub(in crate::cmd) result_type: ResultCollectorType,
+    pub(in crate::cmd) ret: Vec<Frame>,
+}
+
+enum ResultCollectorType {
     Reorder(Vec<Vec<usize>>),
     KeepFirst(usize),
+    SumFirst((usize, i64)),
 }
 
 impl ResultCollector {
-    pub async fn merge(
-        &mut self,
-        ret: &mut Vec<Frame>,
-        ret_rx: oneshot::Receiver<Frame>,
-    ) -> Result<()> {
-        match self {
-            ResultCollector::KeepFirst(x) => {
+    pub fn get_ret(self) -> Vec<Frame> {
+        use ResultCollectorType::*;
+        assert!(
+            match &self.result_type {
+                KeepFirst(x) => *x == 0,
+                Reorder(x) => x.len() == 0,
+                SumFirst(x) => x.0 == 0,
+            },
+            "result_collector should be exhausted before we can use the result"
+        );
+        self.ret
+    }
+
+    pub async fn merge(&mut self, ret_rx: oneshot::Receiver<Frame>) -> Result<()> {
+        use ResultCollectorType::*;
+        match &mut self.result_type {
+            KeepFirst(x) => {
                 if *x == 0 {
                     return Ok(());
                 }
                 *x -= 1;
                 let f = ret_rx.await.map_err(|e| Error::new(e))?;
                 unsafe {
-                    ret.as_mut_ptr().add(*x).write(f);
+                    self.ret.as_mut_ptr().add(*x).write(f);
                 }
                 Ok(())
             }
-            ResultCollector::Reorder(tbl) => {
+            Reorder(tbl) => {
                 while tbl.len() > 0 && tbl[tbl.len() - 1].len() == 0 {
                     tbl.pop();
                 }
@@ -129,11 +150,33 @@ impl ResultCollector {
                 if let Frame::Arrays(arr) = ret_rx.await.map_err(|e| Error::new(e))? {
                     for (f, o) in arr.into_iter().zip(order) {
                         unsafe {
-                            ret.as_mut_ptr().add(o).write(f);
+                            self.ret.as_mut_ptr().add(o).write(f);
                         }
                     }
                 } else {
                     panic!("Only Frame::Array can be reordered.");
+                }
+                Ok(())
+            }
+            SumFirst((x, res)) => {
+                if *x == 0 {
+                    return Ok(());
+                }
+                *x -= 1;
+                let f = ret_rx.await.map_err(|e| Error::new(e))?;
+                *res += match f {
+                    Frame::Integers(v) => v,
+                    _ => {
+                        panic!("SumFirst can only be applied to integers");
+                    }
+                };
+                if *x == 0 {
+                    unsafe {
+                        self.ret
+                            .as_mut_ptr()
+                            .add(0)
+                            .write(Frame::Integers(res.clone()));
+                    }
                 }
                 Ok(())
             }

@@ -38,24 +38,33 @@ pub struct DxDispatcher {
 }
 
 impl DispatchToMultipleDB for DxDispatcher {
-    fn next_command(&mut self) -> IDCommandPair {
-        self.db_amount -= 1;
-        (
-            self.db_amount,
-            AtomicCommand::Oneshot(Dx::new(self.key.clone()).into()),
-        )
+    fn next_command(&mut self) -> Option<IDCommandPair> {
+        if self.db_amount > 0 {
+            self.db_amount -= 1;
+            Some((
+                self.db_amount,
+                AtomicCommand::Oneshot(Dx::new(self.key.clone()).into()),
+            ))
+        } else {
+            None
+        }
     }
 
     fn get_result_collector(&mut self) -> ResultCollector {
-        ResultCollector::KeepFirst(self.db_amount)
+        assert!(self.db_amount > 0, "self.db_amount wasn't initialized");
+        let ret = unsafe { new_unsafe_vec(self.db_amount) };
+        ResultCollector {
+            result_type: ResultCollectorType::KeepFirst(self.db_amount),
+            ret,
+        }
     }
 
     fn dispatch(&mut self, db_amount: usize, _: impl Fn(&[u8]) -> usize) {
         self.db_amount = db_amount;
     }
-    fn len(&self) -> usize {
-        self.db_amount
-    }
+    // fn len(&self) -> usize {
+    //     self.db_amount
+    // }
 }
 
 impl DxDispatcher {

@@ -203,20 +203,10 @@ impl Handler {
             into_task,
             cmd,
         );
-        let expected_amount_ret = cmd.len();
-        assert!(expected_amount_ret > 0);
-        let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
-        unsafe {
-            ret.set_len(expected_amount_ret);
-        }
 
         let mut result_collector = cmd.get_result_collector();
 
-        for _ in 0..self.thread_num {
-            let (db_id, atomic_cmd) = cmd.next_command();
-            if atomic_cmd.is_none() {
-                continue;
-            }
+        while let Some((db_id, atomic_cmd)) = cmd.next_command() {
             let (ret_tx, ret_rx) = oneshot::channel();
             trace!(
                 "[{}]<{}>send to db: {}: {:?}",
@@ -234,7 +224,7 @@ impl Handler {
                 }
             })?;
 
-            result_collector.merge(&mut ret, ret_rx).await?;
+            result_collector.merge(ret_rx).await?;
             trace!(
                 "[{}]<{}>merge db {} result",
                 self.id,
@@ -242,7 +232,7 @@ impl Handler {
                 db_id
             );
         }
-
+        let mut ret = result_collector.get_ret();
         if ret.len() == 1 {
             Ok(ret.pop().unwrap())
         } else {
