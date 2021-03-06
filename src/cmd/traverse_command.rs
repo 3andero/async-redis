@@ -54,14 +54,6 @@ pub enum AtomicCommand {
 }
 
 impl AtomicCommand {
-    // pub fn is_none(&self) -> bool {
-    //     use AtomicCommand::*;
-    //     match self {
-    //         None => true,
-    //         _ => false,
-    //     }
-    // }
-
     pub fn unwrap_oneshot(self) -> OneshotCommand {
         match self {
             AtomicCommand::Oneshot(c) => c,
@@ -89,6 +81,17 @@ impl From<PubSubCommand> for AtomicCommand {
     }
 }
 
+#[macro_export]
+macro_rules! impl_into_atomic_cmd {
+    ($for_type:ident, $internal:ident) => {
+        impl Into<AtomicCommand> for $for_type {
+            fn into(self) -> AtomicCommand {
+                $internal::from(self).into()
+            }
+        }
+    };
+}
+
 pub(in crate::cmd) unsafe fn new_unsafe_vec(expected_amount_ret: usize) -> Vec<Frame> {
     assert!(expected_amount_ret > 0);
     let mut ret: Vec<Frame> = Vec::with_capacity(expected_amount_ret);
@@ -98,7 +101,7 @@ pub(in crate::cmd) unsafe fn new_unsafe_vec(expected_amount_ret: usize) -> Vec<F
 
 #[macro_export]
 macro_rules! new_traverse_command {
-    (@Construct, SendNReturn1, $cmds:ident, $len:ident) => {
+    (@Construct, Return1, $cmds:ident, $len:ident) => {
         Ok(Self {
             cmds: $cmds,
             len: $len,
@@ -106,7 +109,7 @@ macro_rules! new_traverse_command {
             ..Default::default()
         })
     };
-    (@Construct, SendNReturnN, $cmds:ident, $len:ident) => {
+    (@Construct, ReturnN, $cmds:ident, $len:ident) => {
         Ok(Self {
             cmds: $cmds,
             len: $len,
@@ -162,73 +165,25 @@ macro_rules! default_pop {
 
 #[macro_export]
 macro_rules! impl_traverse_command {
-    (@Consts, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
+    (@Consts, $corresponding_cmd:ident, $pop:ident) => {
         fn next_command(&mut self) -> Option<IDCommandPair> {
             while self.db_amount > 0 {
                 self.db_amount -= 1;
                 if let Some(v) = $pop!(self) {
-                    return Some((self.db_amount, $atomic_type::from($corresponding_cmd::new(v)).into()));
+                    return Some((self.db_amount, $corresponding_cmd::new(v).into()));
                 }
             }
             None
         }
     };
 
-    (SendNReturn1, ($mini_command_type:ident)$allow_empty:tt, $target:ident, $corresponding_cmd:ident, $atomic_type:ident) => {
-        impl_traverse_command!(SendNReturn1, ($mini_command_type)$allow_empty, $target, $corresponding_cmd, $atomic_type, default_pop);
-    };
-    (SendNReturnN, ($mini_command_type:ident)$allow_empty:tt, $target:ident, $corresponding_cmd:ident, $atomic_type:ident) => {
-        impl_traverse_command!(SendNReturnN, ($mini_command_type)$allow_empty, $target, $corresponding_cmd, $atomic_type, default_pop);
-    };
+    (for cmd: $atomic_cmd:ident = $dispatcher:ident(($token_stream_schema:ident)$repetition:tt).$pop:ident!() {
+        cmd >> DB
+    }, DB >> N Frame(s) $(>> Sum)?) => {
+        crate::new_traverse_command!($token_stream_schema$repetition, ReturnN, $dispatcher);
 
-    (SendNReturn1, ($mini_command_type:ident)$allow_empty:tt, $target:ident, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
-
-        crate::new_traverse_command!($mini_command_type$allow_empty, SendNReturn1, $target);
-
-        impl DispatchToMultipleDB for $target {
-            impl_traverse_command!(@Consts, $corresponding_cmd, $atomic_type, $pop);
-
-            fn get_result_collector(&mut self) -> ResultCollector {
-                let ret = unsafe {
-                    new_unsafe_vec(1)
-                };
-                ResultCollector {
-                    result_type: ResultCollectorType::KeepFirst(1),
-                    ret,
-                }
-            }
-
-            // fn len(&self) -> usize {
-            //     1
-            // }
-
-            fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
-                self.db_amount = db_amount;
-                let mut tbl_len = vec![0; db_amount];
-                let mut db_ids: Vec<usize> = self
-                    .cmds.iter()
-                    .map(|v| {
-                        let id = dispatch_fn(v.get_key());
-                        tbl_len[id] += 1 as usize;
-                        id
-                    })
-                    .collect();
-
-                self.cmds_tbl = tbl_len.iter().map(|v| Vec::with_capacity(*v)).collect();
-
-                while let Some(db_id) = db_ids.pop() {
-                    self.cmds_tbl[db_id].push(self.cmds.pop().unwrap());
-                }
-            }
-        }
-    };
-
-    (SendNReturnN, ($mini_command_type:ident)$allow_empty:tt, $target:ident, $corresponding_cmd:ident, $atomic_type:ident, $pop:ident) => {
-
-        crate::new_traverse_command!($mini_command_type$allow_empty, SendNReturnN, $target);
-
-        impl DispatchToMultipleDB for $target {
-            impl_traverse_command!(@Consts, $corresponding_cmd, $atomic_type, $pop);
+        impl DispatchToMultipleDB for $dispatcher {
+            impl_traverse_command!(@Consts, $atomic_cmd, $pop);
 
             fn get_result_collector(&mut self) -> ResultCollector {
                 assert!(self.db_amount > 0, "self.db_amount should not be 0");
@@ -241,10 +196,6 @@ macro_rules! impl_traverse_command {
                     ret,
                 }
             }
-
-            // fn len(&self) -> usize {
-            //     self.len
-            // }
 
             fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
                 self.db_amount = db_amount;
@@ -264,6 +215,45 @@ macro_rules! impl_traverse_command {
                 while let Some(db_id) = db_ids.pop() {
                     self.cmds_tbl[db_id].push(self.cmds.pop().unwrap());
                     self.order_tbl[db_id].push(db_ids.len());
+                }
+            }
+        }
+    };
+
+    (for cmd: $atomic_cmd:ident = $dispatcher:ident(($token_stream_schema:ident)$repetition:tt).$pop:ident!() {
+        cmd >> DB
+    }, DB >> 1 Frame) => {
+        crate::new_traverse_command!($token_stream_schema$repetition, Return1, $dispatcher);
+
+        impl DispatchToMultipleDB for $dispatcher {
+            impl_traverse_command!(@Consts, $atomic_cmd, $pop);
+
+            fn get_result_collector(&mut self) -> ResultCollector {
+                let ret = unsafe {
+                    new_unsafe_vec(1)
+                };
+                ResultCollector {
+                    result_type: ResultCollectorType::KeepFirst(1),
+                    ret,
+                }
+            }
+
+            fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
+                self.db_amount = db_amount;
+                let mut tbl_len = vec![0; db_amount];
+                let mut db_ids: Vec<usize> = self
+                    .cmds.iter()
+                    .map(|v| {
+                        let id = dispatch_fn(v.get_key());
+                        tbl_len[id] += 1 as usize;
+                        id
+                    })
+                    .collect();
+
+                self.cmds_tbl = tbl_len.iter().map(|v| Vec::with_capacity(*v)).collect();
+
+                while let Some(db_id) = db_ids.pop() {
+                    self.cmds_tbl[db_id].push(self.cmds.pop().unwrap());
                 }
             }
         }

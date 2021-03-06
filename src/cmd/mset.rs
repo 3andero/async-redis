@@ -34,10 +34,12 @@ impl OneshotExecDB for MSet {
 #[derive(Debug, Clone, Default)]
 pub struct MSetDispatcher {}
 
+use crate::default_pop;
 impl_traverse_command!(
-    SendNReturn1,
-    (KeyValue)+,
-    MSetDispatcher,
-    MSet,
-    OneshotCommand
+    for cmd: MSet = MSetDispatcher((KeyValue)+).default_pop!() {
+        cmd >> DB
+    },
+    DB >> 1 Frame
 );
+
+crate::impl_into_atomic_cmd!(MSet, OneshotCommand);

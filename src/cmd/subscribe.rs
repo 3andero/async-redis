@@ -116,13 +116,13 @@ macro_rules! pop_ret_id {
 }
 
 impl_traverse_command!(
-    SendNReturn1,
-    (Key)+,
-    SubscribeDispatcher,
-    Subscribe,
-    PubSubCommand,
-    pop_ret_id
+    for cmd: Subscribe = SubscribeDispatcher((Key)+).pop_ret_id!() {
+        cmd >> DB
+    },
+    DB >> 1 Frame
 );
+
+crate::impl_into_atomic_cmd!(Subscribe, PubSubCommand);
 
 impl InitSubscription for SubscribeDispatcher {
     fn set_subscription(

@@ -36,4 +36,12 @@ impl OneshotExecDB for MGet {
 #[derive(Debug, Clone, Default)]
 pub struct MGetDispatcher {}
 
-impl_traverse_command!(SendNReturnN, (Key)+, MGetDispatcher, MGet, OneshotCommand);
+use crate::default_pop;
+impl_traverse_command!(
+    for cmd: MGet = MGetDispatcher((Key)+).default_pop!() {
+        cmd >> DB
+    },
+    DB >> N Frame(s)
+);
+
+crate::impl_into_atomic_cmd!(MGet, OneshotCommand);

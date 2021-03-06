@@ -117,7 +117,13 @@ impl ResultCollector {
         assert!(
             match &self.result_type {
                 KeepFirst(x) => *x == 0,
-                Reorder(x) => x.len() == 0,
+                Reorder(tbl) => {
+                    let mut idx = tbl.len();
+                    while idx > 0 && tbl[idx - 1].len() == 0 {
+                        idx -= 1;
+                    }
+                    idx == 0
+                }
                 SumFirst(x) => x.0 == 0,
             },
             "result_collector should be exhausted before we can use the result"
@@ -171,12 +177,7 @@ impl ResultCollector {
                     }
                 };
                 if *x == 0 {
-                    unsafe {
-                        self.ret
-                            .as_mut_ptr()
-                            .add(0)
-                            .write(Frame::Integers(res.clone()));
-                    }
+                    self.ret.push(Frame::Integers(res.clone()));
                 }
                 Ok(())
             }

@@ -130,13 +130,13 @@ macro_rules! pop_unsub_chan {
 }
 
 impl_traverse_command!(
-    SendNReturn1,
-    (Key)*,
-    UnsubDispatcher,
-    Unsubscribe,
-    PubSubCommand,
-    pop_unsub_chan
+    for cmd: Unsubscribe = UnsubDispatcher((Key)*).pop_unsub_chan!() {
+        cmd >> DB
+    },
+    DB >> 1 Frame
 );
+
+crate::impl_into_atomic_cmd!(Unsubscribe, PubSubCommand);
 
 impl InitSubscription for UnsubDispatcher {
     fn set_subscription(

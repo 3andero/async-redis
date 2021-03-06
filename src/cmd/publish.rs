@@ -76,9 +76,9 @@ impl DispatchToMultipleDB for PublishDispatcher {
 
     fn get_result_collector(&mut self) -> ResultCollector {
         assert!(self.db_amount > 0, "self.db_amount wasn't initialized");
-        let ret = unsafe { new_unsafe_vec(self.db_amount) };
+        let ret = Vec::with_capacity(1);
         ResultCollector {
-            result_type: ResultCollectorType::KeepFirst(self.db_amount),
+            result_type: ResultCollectorType::SumFirst((self.db_amount, 0)),
             ret,
         }
     }
@@ -86,9 +86,6 @@ impl DispatchToMultipleDB for PublishDispatcher {
     fn dispatch(&mut self, db_amount: usize, _: impl Fn(&[u8]) -> usize) {
         self.db_amount = db_amount;
     }
-    // fn len(&self) -> usize {
-    //     self.db_amount
-    // }
 }
 
 impl PublishDispatcher {
