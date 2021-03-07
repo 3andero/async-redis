@@ -115,7 +115,6 @@ impl Listener {
         info!("Server Started");
         loop {
             conn_id += 1;
-            // select! {}
             let (stream, _) = self.listener.accept().await?;
             debug!("<{}>: stream accepted", conn_id);
 
@@ -185,22 +184,15 @@ struct Handler {
     thread_num: usize,
 }
 
-#[derive(Debug)]
-enum CommandConvert {
-    Oneshot,
-    PubSub,
-}
-
 impl Handler {
-    async fn traverse_exec<T>(&self, cmd: &mut T, into_task: CommandConvert) -> Result<Frame>
+    async fn traverse_exec<T>(&self, cmd: &mut T) -> Result<Frame>
     where
         T: DispatchToMultipleDB + std::fmt::Debug,
     {
         trace!(
-            "[{}]<{}>enter traverse send: {:?}, {:?}",
+            "[{}]<{}>enter traverse send: {:?}",
             self.id,
             self.connection.id,
-            into_task,
             cmd,
         );
 
@@ -215,14 +207,7 @@ impl Handler {
                 db_id,
                 atomic_cmd
             );
-            self.dispatcher.tasks_tx[db_id].send(match into_task {
-                CommandConvert::Oneshot => {
-                    TaskParam::OneshotTask((atomic_cmd.unwrap_oneshot(), ret_tx))
-                }
-                CommandConvert::PubSub => {
-                    TaskParam::PubSubTask((atomic_cmd.unwrap_pubsub(), ret_tx))
-                }
-            })?;
+            self.dispatcher.tasks_tx[db_id].send((atomic_cmd, ret_tx))?;
 
             result_collector.merge(ret_rx).await?;
             trace!(
@@ -269,8 +254,7 @@ impl Handler {
                     cmd.dispatch(self.thread_num, |key: &[u8]| {
                         self.dispatcher.determine_database(key)
                     });
-                    self.traverse_exec(&mut cmd, CommandConvert::Oneshot)
-                        .await?
+                    self.traverse_exec(&mut cmd).await?
                 }
                 Ok(Command::Oneshot(cmd)) => {
                     trace!(
@@ -282,7 +266,7 @@ impl Handler {
                     let (ret_tx, ret_rx) = oneshot::channel();
                     let db_id = self.dispatcher.determine_database(cmd.get_key());
 
-                    self.dispatcher.tasks_tx[db_id].send(TaskParam::OneshotTask((cmd, ret_tx)))?;
+                    self.dispatcher.tasks_tx[db_id].send((cmd.into(), ret_tx))?;
 
                     ret_rx.await.map_err(|e| Error::new(e))?
                 }
@@ -300,7 +284,7 @@ impl Handler {
                             self.dispatcher.determine_database(key)
                         });
                         if !cmd.need_subscribe() {
-                            self.traverse_exec(&mut cmd, CommandConvert::PubSub).await?
+                            self.traverse_exec(&mut cmd).await?
                         } else {
                             let mut sub_state = vec![false; self.thread_num];
                             match self.handle_hold_on_cmd(&mut cmd, &mut sub_state).await {
@@ -328,9 +312,7 @@ impl Handler {
 
     async fn unsubscribe_all(&self, sub_state: Vec<bool>) {
         let mut unsub_all = UnsubDispatcher::unsubscribe_all(self.id, sub_state, self.thread_num);
-        let _ = self
-            .traverse_exec(&mut unsub_all, CommandConvert::PubSub)
-            .await;
+        let _ = self.traverse_exec(&mut unsub_all).await;
     }
 
     async fn handle_hold_on_cmd(
@@ -346,7 +328,7 @@ impl Handler {
         let (ret_tx, mut ret_rx) = mpsc::channel(BUFSIZE);
 
         cmd.set_subscription(sub_state, &ret_tx, self.id);
-        let ret_frame = self.traverse_exec(cmd, CommandConvert::PubSub).await?;
+        let ret_frame = self.traverse_exec(cmd).await?;
         self.connection.write_frame(&ret_frame).await?;
 
         while !self.shutdown_begin.is_shutdown() {
@@ -404,7 +386,7 @@ impl Handler {
                     if cmd.need_subscribe() {
                         cmd.set_subscription(sub_state, &ret_tx, self.id);
                     }
-                    self.traverse_exec(&mut cmd, CommandConvert::PubSub).await?
+                    self.traverse_exec(&mut cmd).await?
                 }
                 _ => Frame::Errors(Bytes::from_static(
                     b"command not allowed when subscribing to channels",

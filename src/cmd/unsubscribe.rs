@@ -10,8 +10,6 @@ pub struct Unsubscribe {
     handler_id: u64,
 }
 
-impl PubSubExecDB for Unsubscribe {}
-
 impl Unsubscribe {
     pub async fn exec(mut self, db: &mut DB) -> Frame {
         db.subscribe
@@ -136,8 +134,6 @@ impl_traverse_command!(
     DB >> 1 Frame
 );
 
-crate::impl_into_atomic_cmd!(Unsubscribe, PubSubCommand);
-
 impl InitSubscription for UnsubDispatcher {
     fn set_subscription(
         &mut self,
@@ -165,3 +161,5 @@ impl UnsubDispatcher {
         .into()
     }
 }
+
+impl AtomicCMDMarker for Unsubscribe {}

@@ -10,10 +10,8 @@ impl MSet {
     pub fn new(cmds: Vec<MiniCommand>) -> Self {
         Self { cmds }
     }
-}
 
-impl OneshotExecDB for MSet {
-    fn exec(self, db: &mut DB) -> Frame {
+    pub fn exec(self, db: &mut DB) -> Frame {
         let nounce0 = db.counter;
         db.counter += self.cmds.len() as u64;
         self.cmds.into_iter().fold(nounce0 + 1, |i, cmd| {
@@ -24,7 +22,9 @@ impl OneshotExecDB for MSet {
         });
         Frame::Ok
     }
+}
 
+impl OneshotExecDB for MSet {
     fn get_key(&self) -> &[u8] {
         &self.cmds[0].get_key()
     }
@@ -42,4 +42,4 @@ impl_traverse_command!(
     DB >> 1 Frame
 );
 
-crate::impl_into_atomic_cmd!(MSet, OneshotCommand);
+impl AtomicCMDMarker for MSet {}

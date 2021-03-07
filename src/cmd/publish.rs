@@ -11,8 +11,6 @@ pub struct Publish {
     val: Frame,
 }
 
-impl PubSubExecDB for Publish {}
-
 impl Publish {
     pub async fn exec(self, db: &mut DB) -> Frame {
         if let Some(listeners) = db.subscribe.get_listeners(&self.key) {
@@ -67,7 +65,7 @@ impl DispatchToMultipleDB for PublishDispatcher {
             self.db_amount -= 1;
             Some((
                 self.db_amount,
-                AtomicCommand::PubSub(Publish::new(self.key.clone(), self.val.clone()).into()),
+                Publish::new(self.key.clone(), self.val.clone()).into(),
             ))
         } else {
             None
@@ -103,3 +101,5 @@ impl PublishDispatcher {
 impl InitSubscription for PublishDispatcher {
     fn set_subscription(&mut self, _: &mut Vec<bool>, _: &mpsc::Sender<Frame>, _: u64) {}
 }
+
+impl AtomicCMDMarker for Publish {}

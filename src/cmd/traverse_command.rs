@@ -36,60 +36,13 @@ impl MiniCommandTrait for _Single {
     }
 }
 
-pub type IDCommandPair = (usize, AtomicCommand);
+pub type IDCommandPair = (usize, AtomicCMD);
 
 #[enum_dispatch(TraverseCommand)]
 pub trait DispatchToMultipleDB {
-    // fn len(&self) -> usize;
     fn next_command(&mut self) -> Option<IDCommandPair>;
     fn get_result_collector(&mut self) -> ResultCollector;
     fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize);
-}
-
-#[derive(Debug)]
-pub enum AtomicCommand {
-    Oneshot(OneshotCommand),
-    PubSub(PubSubCommand),
-    // None,
-}
-
-impl AtomicCommand {
-    pub fn unwrap_oneshot(self) -> OneshotCommand {
-        match self {
-            AtomicCommand::Oneshot(c) => c,
-            _ => panic!("This is not a `Oneshot` Command"),
-        }
-    }
-
-    pub fn unwrap_pubsub(self) -> PubSubCommand {
-        match self {
-            AtomicCommand::PubSub(c) => c,
-            _ => panic!("This is not a `PubSub` Command"),
-        }
-    }
-}
-
-impl From<OneshotCommand> for AtomicCommand {
-    fn from(cmd: OneshotCommand) -> Self {
-        AtomicCommand::Oneshot(cmd)
-    }
-}
-
-impl From<PubSubCommand> for AtomicCommand {
-    fn from(cmd: PubSubCommand) -> Self {
-        AtomicCommand::PubSub(cmd)
-    }
-}
-
-#[macro_export]
-macro_rules! impl_into_atomic_cmd {
-    ($for_type:ident, $internal:ident) => {
-        impl Into<AtomicCommand> for $for_type {
-            fn into(self) -> AtomicCommand {
-                $internal::from(self).into()
-            }
-        }
-    };
 }
 
 pub(in crate::cmd) unsafe fn new_unsafe_vec(expected_amount_ret: usize) -> Vec<Frame> {

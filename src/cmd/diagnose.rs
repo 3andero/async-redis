@@ -19,13 +19,13 @@ impl Dx {
     pub fn new(key: DxCommand) -> Dx {
         Self { key }
     }
+
+    pub fn exec(self, db: &mut DB) -> Frame {
+        db.diagnose(&self.key)
+    }
 }
 
 impl OneshotExecDB for Dx {
-    fn exec(self, db: &mut DB) -> Frame {
-        db.diagnose(&self.key)
-    }
-
     fn get_key(&self) -> &[u8] {
         b""
     }
@@ -41,10 +41,7 @@ impl DispatchToMultipleDB for DxDispatcher {
     fn next_command(&mut self) -> Option<IDCommandPair> {
         if self.db_amount > 0 {
             self.db_amount -= 1;
-            Some((
-                self.db_amount,
-                AtomicCommand::Oneshot(Dx::new(self.key.clone()).into()),
-            ))
+            Some((self.db_amount, Dx::new(self.key.clone()).into()))
         } else {
             None
         }
@@ -62,9 +59,6 @@ impl DispatchToMultipleDB for DxDispatcher {
     fn dispatch(&mut self, db_amount: usize, _: impl Fn(&[u8]) -> usize) {
         self.db_amount = db_amount;
     }
-    // fn len(&self) -> usize {
-    //     self.db_amount
-    // }
 }
 
 impl DxDispatcher {
@@ -85,3 +79,5 @@ impl DxDispatcher {
         })
     }
 }
+
+impl AtomicCMDMarker for Dx {}

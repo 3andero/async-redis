@@ -10,10 +10,8 @@ impl MGet {
     pub fn new(keys: Vec<MiniCommand>) -> MGet {
         Self { keys }
     }
-}
 
-impl OneshotExecDB for MGet {
-    fn exec(self, db: &mut DB) -> Frame {
+    pub fn exec(self, db: &mut DB) -> Frame {
         self.keys
             .iter()
             .map(|cmd| {
@@ -26,7 +24,9 @@ impl OneshotExecDB for MGet {
             .collect::<Vec<_>>()
             .into()
     }
+}
 
+impl OneshotExecDB for MGet {
     fn get_key(&self) -> &[u8] {
         &self.keys[0].get_key()
     }
@@ -44,4 +44,4 @@ impl_traverse_command!(
     DB >> N Frame(s)
 );
 
-crate::impl_into_atomic_cmd!(MGet, OneshotCommand);
+impl AtomicCMDMarker for MGet {}

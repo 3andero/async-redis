@@ -22,17 +22,17 @@ impl Get {
             variant,
         })
     }
-}
 
-impl OneshotExecDB for Get {
-    fn exec(self, db: &mut DB) -> Frame {
+    pub fn exec(self, db: &mut DB) -> Frame {
         match self.variant {
             GetVariant::Get => db.get(&self.key),
             GetVariant::TTL => db.ttl(&self.key, false),
             GetVariant::PTTL => db.ttl(&self.key, true),
         }
     }
+}
 
+impl OneshotExecDB for Get {
     fn get_key(&self) -> &[u8] {
         &self.key.as_ref()
     }
@@ -67,3 +67,5 @@ impl DB {
             )
     }
 }
+
+impl AtomicCMDMarker for Get {}

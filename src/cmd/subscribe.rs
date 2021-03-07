@@ -11,8 +11,6 @@ pub struct Subscribe {
     ret_tx: Option<mpsc::Sender<Frame>>,
 }
 
-impl PubSubExecDB for Subscribe {}
-
 impl Subscribe {
     pub fn new(value: (Vec<MiniCommand>, Option<mpsc::Sender<Frame>>, u64)) -> Self {
         Self {
@@ -122,8 +120,6 @@ impl_traverse_command!(
     DB >> 1 Frame
 );
 
-crate::impl_into_atomic_cmd!(Subscribe, PubSubCommand);
-
 impl InitSubscription for SubscribeDispatcher {
     fn set_subscription(
         &mut self,
@@ -151,3 +147,5 @@ impl InitSubscription for SubscribeDispatcher {
         self.handler_id = handler_id;
     }
 }
+
+impl AtomicCMDMarker for Subscribe {}

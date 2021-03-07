@@ -12,11 +12,7 @@ use tokio::{
 };
 use tracing::{debug, info, trace};
 
-#[derive(Debug)]
-pub enum TaskParam {
-    OneshotTask((OneshotCommand, oneshot::Sender<Frame>)),
-    PubSubTask((PubSubCommand, oneshot::Sender<Frame>)),
-}
+pub type TaskParam = (AtomicCMD, oneshot::Sender<Frame>);
 
 #[derive(Debug)]
 pub struct Entry {
@@ -30,8 +26,6 @@ pub struct DB {
     pub database: FxHashMap<Bytes, Entry>,
     pub expiration: ExpirationSubModule,
     pub subscribe: SubscriptionSubModule,
-    // pub subscription: FxHashMap<Bytes, VecMap<u64>>,
-    // pub subscriber: FxHashMap<u64, mpsc::Sender<Frame>>,
     pub id: usize,
     pub counter: u64,
     pub shutdown_tx: broadcast::Sender<()>,
@@ -85,8 +79,6 @@ impl DB {
                 expiration: BTreeMap::new(),
                 when: None,
             },
-            // subscriber: FxHashMap::default(),
-            // subscription: FxHashMap::default(),
             subscribe: SubscriptionSubModule::new(),
             id,
             counter: 0,
@@ -141,6 +133,23 @@ impl DB {
     }
 }
 
+macro_rules! exec {
+    ($cmd:ident, $db:expr) => {{
+        use AtomicCMD::*;
+        match $cmd {
+            Get(c) => c.exec($db),
+            Set(c) => c.exec($db),
+            MGet(c) => c.exec($db),
+            MSet(c) => c.exec($db),
+            Dx(c) => c.exec($db),
+            Incr(c) => c.exec($db),
+            Subscribe(c) => c.exec($db),
+            Publish(c) => c.exec($db).await,
+            Unsubscribe(c) => c.exec($db).await,
+        }
+    }};
+}
+
 pub async fn database_manager(
     mut tasks_rx: mpsc::UnboundedReceiver<TaskParam>,
     shutdown_tx: broadcast::Sender<()>,
@@ -164,28 +173,11 @@ pub async fn database_manager(
                 if res.is_none() {
                     continue;
                 }
-                match res.unwrap() {
-                    TaskParam::OneshotTask((cmd, ret_tx)) => {
-                        trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
-                        let _ = ret_tx.send(cmd.exec(&mut db));
-                    },
-                    TaskParam::PubSubTask((cmd, ret_tx)) => {
-                        trace!("db before: {:?}", db);
-                        match cmd {
-                            PubSubCommand::Subscribe(_cmd) => {
-                                let _ = ret_tx.send(_cmd.exec(&mut db));
-                            }
-                            PubSubCommand::Publish(_cmd) => {
-                                let _ = ret_tx.send(_cmd.exec(&mut db).await);
-                            }
-                            PubSubCommand::Unsubscribe(_cmd) => {
-                                let _ = ret_tx.send(_cmd.exec(&mut db).await);
-                            }
-                        }
-                        trace!("db after: {:?}", db);
-                    }
-                };
-
+                let (cmd, ret_tx) = res.unwrap();
+                trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
+                trace!("db before: {:?}", db);
+                let _ = ret_tx.send(exec!(cmd, &mut db));
+                trace!("db after: {:?}", db);
             }
             _ = tokio::time::sleep_until(
                 when.map(|v| v.max(now + Duration::new(1000, 0)))

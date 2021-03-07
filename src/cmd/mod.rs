@@ -45,26 +45,41 @@ pub enum Command {
 pub enum OneshotCommand {
     Get,
     Set,
-    MGet,
-    MSet,
     Dx,
     Incr,
 }
 
+impl Into<AtomicCMD> for OneshotCommand {
+    fn into(self) -> AtomicCMD {
+        use OneshotCommand::*;
+        match self {
+            Get(c) => AtomicCMD::Get(c),
+            Set(c) => AtomicCMD::Set(c),
+            Incr(c) => AtomicCMD::Incr(c),
+            Dx(c) => AtomicCMD::Dx(c),
+        }
+    }
+}
+
 #[enum_dispatch]
-#[derive(Debug, Clone)]
-pub enum PubSubCommand {
+#[derive(Debug)]
+pub enum AtomicCMD {
+    Get,
+    Set,
+    MGet,
+    MSet,
+    Dx,
+    Incr,
     Subscribe,
     Publish,
     Unsubscribe,
 }
 
-#[enum_dispatch(PubSubCommand)]
-pub trait PubSubExecDB {}
+#[enum_dispatch(AtomicCMD)]
+pub trait AtomicCMDMarker {}
 
 #[enum_dispatch(OneshotCommand)]
 pub trait OneshotExecDB {
-    fn exec(self, db: &mut DB) -> Frame;
     fn get_key(&self) -> &[u8];
 }
 
@@ -124,7 +139,7 @@ impl ResultCollector {
                     }
                     idx == 0
                 }
-                SumFirst(x) => x.0 == 0,
+                SumFirst(_) => true,
             },
             "result_collector should be exhausted before we can use the result"
         );

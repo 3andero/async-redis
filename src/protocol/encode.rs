@@ -92,7 +92,6 @@ fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
 }
 
 pub fn encode(frame: &Frame) -> Result<Vec<Bytes>> {
-    // let mut buf = BytesMut::with_capacity(frame.raw_bytes_len());
     let mut buf = EfficientBuffer::new(frame);
     encode_iter(frame, &mut buf);
     buf.flush();

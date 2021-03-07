@@ -61,11 +61,9 @@ impl ReusableBuf {
             // );
             let mut new_vec = Vec::new();
             new_vec.reserve_exact(self.len() + additional);
-            // let mut new_vec = Vec::with_capacity(self.len() + additional);
             new_vec.extend_from_slice(self.as_ref());
             self.inner = new_vec;
             self.start = 0;
-            // self.inner.reserve(additional);
         }
     }
 
