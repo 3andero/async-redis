@@ -1,6 +1,10 @@
 use super::MiniCommand;
 use crate::{cmd::*, db::SubscriptionSubModule, protocol::Frame, utils::VecMap, *};
 use async_redis::*;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use tokio::sync::mpsc;
 use traverse_command::*;
 
@@ -9,91 +13,119 @@ pub struct Subscribe {
     cmds: Vec<MiniCommand>,
     handler_id: u64,
     ret_tx: Option<mpsc::Sender<Frame>>,
+    total_chn_amount: Arc<AtomicUsize>,
 }
 
 impl Subscribe {
-    pub fn new(value: (Vec<MiniCommand>, Option<mpsc::Sender<Frame>>, u64)) -> Self {
+    pub fn new(
+        value: (
+            Vec<MiniCommand>,
+            Option<mpsc::Sender<Frame>>,
+            u64,
+            Arc<AtomicUsize>,
+        ),
+    ) -> Self {
         Self {
             cmds: value.0,
             handler_id: value.2,
             ret_tx: value.1,
+            total_chn_amount: value.3,
         }
     }
 
-    pub fn exec(mut self, db: &mut DB) -> Frame {
+    pub fn exec(self, db: &mut DB) -> Frame {
         db.subscribe
-            .subscribe(&mut self.cmds, self.handler_id, self.ret_tx);
-        Frame::Ok
+            .subscribe(self.cmds, self.handler_id, self.ret_tx, self.total_chn_amount)
     }
 }
 
 impl SubscriptionSubModule {
     pub fn subscribe(
         &mut self,
-        keys: &mut Vec<MiniCommand>,
+        keys: Vec<MiniCommand>,
         handler_id: u64,
         ret_tx: Option<mpsc::Sender<Frame>>,
+        total_chn_amount: Arc<AtomicUsize>,
     ) -> Frame {
-        let (_, listening_inner) = self
-            .subscriber
+        let (_, chn_listening_inner) = self
+            .subscriber_info
             .entry(handler_id)
             .and_modify(|handler_info| {
                 handler_info.1.reserve(keys.len());
             })
             .or_insert_with(|| (ret_tx.unwrap(), VecMap::with_capacity(keys.len())));
-        let mut listening = VecMap::new();
-        std::mem::swap(&mut listening, listening_inner);
+        let mut chn_listening = VecMap::new();
+        std::mem::swap(&mut chn_listening, chn_listening_inner);
 
-        for cmd in keys.drain(..) {
-            match cmd {
-                MiniCommand::Single(key) => {
-                    let mut is_new = false;
-                    let channel_id = match self.channels.get(&key) {
-                        Some(id) => *id,
-                        None => {
-                            self.counter += 1;
-                            let cid = self.counter;
-                            is_new = true;
-                            self.channels.insert(key.clone(), cid);
-                            self.channel_info.insert(cid, key);
-                            cid
-                        }
-                    };
+        let mut is_key_new_subs = vec![false; keys.len()];
+        let mut new_subs_amount = 0;
+        // let mut curr_chn_amount = chn_listening.len();
 
-                    is_new = if is_new {
-                        let mut new_channel_subscriber = VecMap::with_capacity(1);
-                        new_channel_subscriber.push(&handler_id);
-                        self.subscription.insert(channel_id, new_channel_subscriber);
-                        true
-                    } else {
-                        match self.subscription.get_mut(&channel_id) {
-                            Some(vm) => vm.push(&handler_id),
-                            None => panic!(),
-                        }
-                    };
+        for (idx, cmd) in keys.iter().enumerate() {
+            let key = cmd.ref_single();
 
-                    if is_new {
-                        listening.push(&channel_id);
-                    }
+            let (channel_id, is_new_chn) = match self.channels.get(key) {
+                Some(id) => (*id, false),
+                None => {
+                    self.chn_id_gen += 1;
+                    let cid = self.chn_id_gen;
+                    self.channels.insert(key.clone(), cid);
+                    self.channel_info.insert(cid, key.clone());
+                    (cid, true)
                 }
-                _ => panic!(),
+            };
+
+            let is_new_subscription = if is_new_chn {
+                let mut new_channel_subscriber = VecMap::with_capacity(1);
+                new_channel_subscriber.push(&handler_id);
+                self.subscriber.insert(channel_id, new_channel_subscriber);
+                true
+            } else {
+                match self.subscriber.get_mut(&channel_id) {
+                    Some(vm) => vm.push(&handler_id),
+                    None => panic!(),
+                }
+            };
+
+            if is_new_subscription {
+                new_subs_amount += 1;
+                is_key_new_subs[idx] = true;
+                chn_listening.push(&channel_id);
             }
         }
 
-        match self.subscriber.get_mut(&handler_id) {
+        match self.subscriber_info.get_mut(&handler_id) {
             Some((_, listening_inner)) => {
-                std::mem::swap(listening_inner, &mut listening);
+                std::mem::swap(listening_inner, &mut chn_listening);
             }
             _ => panic!(),
         }
-        Frame::Ok
+
+        let mut prev_amount = total_chn_amount.fetch_add(new_subs_amount, Ordering::AcqRel);
+        is_key_new_subs
+            .iter()
+            .zip(keys)
+            .map(|(is_new, cmd)| {
+                if *is_new {
+                    prev_amount += 1;
+                }
+
+                Frame::Arrays(vec![
+                    Frame::SimpleString(Bytes::from_static(b"Subscribe")),
+                    Frame::BulkStrings(cmd.unwrap_single()),
+                    Frame::Integers(prev_amount as i64),
+                ])
+            })
+            .collect::<Vec<Frame>>()
+            .into()
     }
 }
-#[define_traverse_command("N:1")]
+#[define_traverse_command("N:N")]
 #[derive(Debug, Clone, Default)]
 pub struct SubscribeDispatcher {
     ret_txs: Vec<Option<mpsc::Sender<Frame>>>,
     handler_id: u64,
+    total_chn_amount: Arc<AtomicUsize>,
 }
 
 #[macro_export]
@@ -109,7 +141,7 @@ macro_rules! pop_ret_id {
             .cmds_tbl
             .pop()
             .filter(|v| v.len() > 0)
-            .map(|v| (v, ret_tx, $self.handler_id))
+            .map(|v| (v, ret_tx, $self.handler_id, $self.total_chn_amount.clone()))
     }};
 }
 
@@ -117,7 +149,7 @@ impl_traverse_command!(
     for cmd: Subscribe = SubscribeDispatcher((Key)+).pop_ret_id!() {
         cmd >> DB
     },
-    DB >> 1 Frame
+    DB >> N Frame(s) >> AsIs
 );
 
 impl InitSubscription for SubscribeDispatcher {
@@ -126,6 +158,7 @@ impl InitSubscription for SubscribeDispatcher {
         sub_state: &mut Vec<bool>,
         ret_tx: &mpsc::Sender<Frame>,
         handler_id: u64,
+        total_chn_amount: Arc<AtomicUsize>,
     ) {
         assert!(
             self.cmds_tbl.len() > 0,
@@ -145,6 +178,7 @@ impl InitSubscription for SubscribeDispatcher {
             })
             .collect();
         self.handler_id = handler_id;
+        self.total_chn_amount = total_chn_amount;
     }
 }
 

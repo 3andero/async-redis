@@ -36,6 +36,24 @@ impl MiniCommandTrait for _Single {
     }
 }
 
+impl MiniCommand {
+    pub fn unwrap_single(self) -> Bytes {
+        use MiniCommand::*;
+        match self {
+            Single(b) => b,
+            Pair(_) => panic!("self should be a `single` variant"),
+        }
+    }
+
+    pub fn ref_single(&self) -> &Bytes {
+        use MiniCommand::*;
+        match self {
+            Single(b) => b,
+            Pair(_) => panic!("self should be a `single` variant"),
+        }
+    }
+}
+
 pub type IDCommandPair = (usize, AtomicCMD);
 
 #[enum_dispatch(TraverseCommand)]
@@ -106,6 +124,42 @@ macro_rules! new_traverse_command {
 }
 
 #[macro_export]
+macro_rules! new_result_collector {
+    (Reorder) => {
+        fn get_result_collector(&mut self) -> ResultCollector {
+            assert!(
+                self.db_amount > 0,
+                "self.db_amount:{} should not be 0",
+                self.db_amount
+            );
+            assert!(
+                self.order_tbl.len() == self.db_amount,
+                "self.order_tbl.len() should not be 0"
+            );
+            let ret = unsafe { new_unsafe_vec(self.len) };
+            ResultCollector {
+                result_type: ResultCollectorType::Reorder(std::mem::take(&mut self.order_tbl)),
+                ret,
+            }
+        }
+    };
+    (AsIs) => {
+        fn get_result_collector(&mut self) -> ResultCollector {
+            assert!(
+                self.db_amount > 0,
+                "self.db_amount:{} should not be 0",
+                self.db_amount
+            );
+
+            ResultCollector {
+                result_type: ResultCollectorType::AsIs,
+                ret: Vec::new(),
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! default_pop {
     ($self:ident) => {{
         assert!(
@@ -132,23 +186,25 @@ macro_rules! impl_traverse_command {
 
     (for cmd: $atomic_cmd:ident = $dispatcher:ident(($token_stream_schema:ident)$repetition:tt).$pop:ident!() {
         cmd >> DB
-    }, DB >> N Frame(s) $(>> Sum)?) => {
+    }, DB >> N Frame(s) >> $merge_result:ident) => {
         crate::new_traverse_command!($token_stream_schema$repetition, ReturnN, $dispatcher);
 
         impl DispatchToMultipleDB for $dispatcher {
             impl_traverse_command!(@Consts, $atomic_cmd, $pop);
 
-            fn get_result_collector(&mut self) -> ResultCollector {
-                assert!(self.db_amount > 0, "self.db_amount should not be 0");
-                assert!(self.order_tbl.len() == self.db_amount, "self.order_tbl.len() should not be 0");
-                let ret = unsafe {
-                    new_unsafe_vec(self.len)
-                };
-                ResultCollector {
-                    result_type: ResultCollectorType::Reorder(std::mem::take(&mut self.order_tbl)),
-                    ret,
-                }
-            }
+            // fn get_result_collector(&mut self) -> ResultCollector {
+            //     assert!(self.db_amount > 0, "self.db_amount:{} should not be 0", self.db_amount);
+            //     assert!(self.order_tbl.len() == self.db_amount, "self.order_tbl.len() should not be 0");
+            //     let ret = unsafe {
+            //         new_unsafe_vec(self.len)
+            //     };
+            //     ResultCollector {
+            //         result_type: ResultCollectorType::Reorder(std::mem::take(&mut self.order_tbl)),
+            //         ret,
+            //     }
+            // }
+
+            crate::new_result_collector!($merge_result);
 
             fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
                 self.db_amount = db_amount;

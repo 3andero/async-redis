@@ -17,7 +17,13 @@ impl Publish {
             let mut sent = 0;
             for &id in listeners.iter() {
                 if let Some(sender) = db.subscribe.get_ret_tx(&id) {
-                    if sender.send(self.val.clone()).await.is_ok() {
+                    if sender
+                        .send(
+                            vec![Frame::Message, self.key.clone().into(), self.val.clone()].into(),
+                        )
+                        .await
+                        .is_ok()
+                    {
                         sent += 1;
                     } else {
                         todo!("drop inactive subscriber")
@@ -34,13 +40,13 @@ impl Publish {
 impl SubscriptionSubModule {
     pub fn get_listeners(&self, key: &Bytes) -> Option<&VecMap<u64>> {
         match self.channels.get(key) {
-            Some(channel_id) => self.subscription.get(channel_id),
+            Some(channel_id) => self.subscriber.get(channel_id),
             None => None,
         }
     }
 
     pub fn get_ret_tx(&self, handler_id: &u64) -> Option<&mpsc::Sender<Frame>> {
-        self.subscriber
+        self.subscriber_info
             .get(handler_id)
             .map(|handler_info| &handler_info.0)
     }
@@ -99,7 +105,14 @@ impl PublishDispatcher {
 }
 
 impl InitSubscription for PublishDispatcher {
-    fn set_subscription(&mut self, _: &mut Vec<bool>, _: &mpsc::Sender<Frame>, _: u64) {}
+    fn set_subscription(
+        &mut self,
+        _: &mut Vec<bool>,
+        _: &mpsc::Sender<Frame>,
+        _: u64,
+        _: Arc<AtomicUsize>,
+    ) {
+    }
 }
 
 impl AtomicCMDMarker for Publish {}

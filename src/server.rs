@@ -2,7 +2,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     future::Future,
     hash::{Hash, Hasher},
-    sync::atomic::{AtomicU32, AtomicU64, Ordering::*},
+    sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering::*},
     sync::Arc,
 };
 
@@ -326,8 +326,9 @@ impl Handler {
             self.connection.id
         );
         let (ret_tx, mut ret_rx) = mpsc::channel(BUFSIZE);
+        let total_chn_amount = Arc::new(AtomicUsize::new(0));
 
-        cmd.set_subscription(sub_state, &ret_tx, self.id);
+        cmd.set_subscription(sub_state, &ret_tx, self.id, total_chn_amount.clone());
         let ret_frame = self.traverse_exec(cmd).await?;
         self.connection.write_frame(&ret_frame).await?;
 
@@ -384,7 +385,7 @@ impl Handler {
                         self.dispatcher.determine_database(key)
                     });
                     if cmd.need_subscribe() {
-                        cmd.set_subscription(sub_state, &ret_tx, self.id);
+                        cmd.set_subscription(sub_state, &ret_tx, self.id, total_chn_amount.clone());
                     }
                     self.traverse_exec(&mut cmd).await?
                 }

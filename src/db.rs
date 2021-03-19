@@ -56,11 +56,11 @@ impl ExpirationSubModule {
 
 #[derive(Debug, Default)]
 pub struct SubscriptionSubModule {
-    pub counter: usize,
+    pub chn_id_gen: usize,
     pub channels: FxHashMap<Bytes, usize>,
     pub channel_info: FxHashMap<usize, Bytes>,
-    pub subscription: FxHashMap<usize, VecMap<u64>>,
-    pub subscriber: FxHashMap<u64, (mpsc::Sender<Frame>, VecMap<usize>)>,
+    pub subscriber: FxHashMap<usize, VecMap<u64>>,
+    pub subscriber_info: FxHashMap<u64, (mpsc::Sender<Frame>, VecMap<usize>)>,
 }
 
 impl SubscriptionSubModule {

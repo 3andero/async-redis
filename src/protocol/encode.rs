@@ -35,8 +35,9 @@ impl EfficientBuffer {
 }
 
 fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
+    use Frame::*;
     match frame {
-        Frame::SimpleString(msg) => {
+        SimpleString(msg) => {
             buf.put_u8(SIMPLE_STRING_MARK);
             if msg.len() > SMALL_BYTES_THRESHOLD {
                 buf.append_bytes(msg);
@@ -45,7 +46,7 @@ fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
             }
             buf.put_slice(DLEM_MARK);
         }
-        Frame::Errors(msg) => {
+        Errors(msg) => {
             buf.put_u8(ERROR_MARK);
             if msg.len() > SMALL_BYTES_THRESHOLD {
                 buf.append_bytes(msg);
@@ -54,12 +55,12 @@ fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
             }
             buf.put_slice(DLEM_MARK);
         }
-        &Frame::Integers(num) => {
+        &Integers(num) => {
             buf.put_u8(INTEGER_MARK);
             buf.put_slice(&integer_to_bytes(num)[..]);
             buf.put_slice(DLEM_MARK);
         }
-        Frame::BulkStrings(msg) => {
+        BulkStrings(msg) => {
             buf.put_u8(BULK_STRING_MARK);
             buf.put_slice(&integer_to_bytes(msg.len())[..]);
             buf.put_slice(DLEM_MARK);
@@ -70,7 +71,7 @@ fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
             }
             buf.put_slice(DLEM_MARK);
         }
-        Frame::Arrays(arr) => {
+        Arrays(arr) => {
             buf.put_u8(ARRAY_MARK);
             buf.put_slice(&integer_to_bytes(arr.len())[..]);
             buf.put_slice(DLEM_MARK);
@@ -78,16 +79,19 @@ fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
                 encode_iter(&f, buf);
             }
         }
-        Frame::NullString => {
+        NullString => {
             buf.put_slice(NIL_STRING_FRAME);
         }
-        Frame::NullArray => {
+        NullArray => {
             buf.put_slice(NIL_ARRAY_FRAME);
         }
         Frame::Ok => {
             buf.put_slice(OK_FRAME);
         }
-        Frame::_DetachSubscribeMode(_) => panic!(),
+        Message => {
+            buf.put_slice(MESSAGE_FRAME);
+        }
+        _DetachSubscribeMode(_) => panic!(),
     };
 }
 

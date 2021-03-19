@@ -33,6 +33,8 @@ use crate::{db::DB, protocol::Frame, utils};
 use bytes::*;
 use enum_dispatch::*;
 
+use std::sync::{atomic::AtomicUsize, Arc};
+
 #[allow(dead_code)]
 pub enum Command {
     Oneshot(OneshotCommand),
@@ -112,6 +114,7 @@ pub trait InitSubscription {
         sub_state: &mut Vec<bool>,
         ret_tx: &mpsc::Sender<Frame>,
         handler_id: u64,
+        total_chn_amount: Arc<AtomicUsize>,
     );
 }
 
@@ -124,6 +127,7 @@ enum ResultCollectorType {
     Reorder(Vec<Vec<usize>>),
     KeepFirst(usize),
     SumFirst((usize, i64)),
+    AsIs,
 }
 
 impl ResultCollector {
@@ -140,6 +144,7 @@ impl ResultCollector {
                     idx == 0
                 }
                 SumFirst(_) => true,
+                AsIs => true,
             },
             "result_collector should be exhausted before we can use the result"
         );
@@ -194,6 +199,17 @@ impl ResultCollector {
                 if *x == 0 {
                     self.ret.push(Frame::Integers(res.clone()));
                 }
+                Ok(())
+            }
+            AsIs => {
+                let f = ret_rx.await.map_err(|e| Error::new(e))?;
+                let f_arr = match f {
+                    Frame::Arrays(arr) => {
+                        arr
+                    }
+                    _ => panic!(),
+                };
+                self.ret.extend_from_slice(f_arr.as_slice());
                 Ok(())
             }
         }

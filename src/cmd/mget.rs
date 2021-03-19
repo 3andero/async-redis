@@ -15,11 +15,7 @@ impl MGet {
         self.keys
             .iter()
             .map(|cmd| {
-                if let MiniCommand::Single(v) = cmd {
-                    return db.get(v);
-                } else {
-                    panic!()
-                }
+                db.get(cmd.ref_single())
             })
             .collect::<Vec<_>>()
             .into()
@@ -41,7 +37,7 @@ impl_traverse_command!(
     for cmd: MGet = MGetDispatcher((Key)+).default_pop!() {
         cmd >> DB
     },
-    DB >> N Frame(s)
+    DB >> N Frame(s) >> Reorder
 );
 
 impl AtomicCMDMarker for MGet {}
