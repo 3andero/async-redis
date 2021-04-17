@@ -92,6 +92,9 @@ fn encode_iter(frame: &Frame, buf: &mut EfficientBuffer) {
             buf.put_slice(MESSAGE_FRAME);
         }
         _DetachSubscribeMode(_) => panic!(),
+        Pong => {
+            buf.put_slice(PONG_FRAME);
+        }
     };
 }
 

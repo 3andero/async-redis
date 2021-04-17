@@ -14,6 +14,7 @@ pub enum CommandTable {
     SUBSCRIBE,
     PUBLISH,
     UNSUBSCRIBE,
+    PING,
     UNIMPLEMENTED,
 }
 
@@ -56,9 +57,10 @@ const DX: usize = rolling_hash_const(b"dx");
 const SHUTDOWN: usize = rolling_hash_const(b"shutdown");
 const SUBSCRIBE: usize = rolling_hash_const(b"subscribe");
 const PUBLISH: usize = rolling_hash_const(b"publish");
+const PING: usize = rolling_hash_const(b"ping");
 const UNSUBSCRIBE: usize = rolling_hash_const(b"unsubscribe");
 
-pub const COMMAND_NUM: usize = 19;
+pub const COMMAND_NUM: usize = 20;
 
 const UNSORTED_TBL: [(usize, CommandTable); COMMAND_NUM] = [
     (GET, CommandTable::GET(GetVariant::Get)),
@@ -79,6 +81,7 @@ const UNSORTED_TBL: [(usize, CommandTable); COMMAND_NUM] = [
     (PUBLISH, CommandTable::PUBLISH),
     (UNSUBSCRIBE, CommandTable::UNSUBSCRIBE),
     (DX, CommandTable::DX),
+    (PING, CommandTable::PING),
     (SHUTDOWN, CommandTable::SHUTDOWN),
 ];
 

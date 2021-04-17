@@ -30,7 +30,8 @@ syn = {version = "*", features = ["full", "extra-traits"]}
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # jemallocator = "0.3.2"
-mimalloc = { version = "0.1.25", default-features = false }
+# mimalloc = { version = "0.1.25", default-features = false }
+snmalloc-rs = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # jemallocator = "0.3.2"
@@ -41,7 +42,7 @@ opt-level = 3
 debug = false
 debug-assertions = false
 overflow-checks = false
-lto = true
+#lto = true
 codegen-units = 1
 #codegen-units = 16
 panic = 'abort'

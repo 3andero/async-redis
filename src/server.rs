@@ -242,6 +242,16 @@ impl Handler {
                 opt_frame
             );
             let frame = match opt_frame {
+                // This is a really really bad workaround.
+                // I'm not willing to support Redis inline command,
+                // but want to use redis-benchmark to test my `ping` implementation.
+                // This test, however, requires inline command implemented.
+                // In order to make this work, I reject all inline command and return `nil` immediately
+                // This branch `f @ Frame::NullString` does exactly that.
+                Some(f @ Frame::NullString) => {
+                    self.connection.write_frame(&f).await?;
+                    continue;
+                }
                 Some(f) => f,
                 None => {
                     return Ok(());
@@ -250,6 +260,15 @@ impl Handler {
 
             let command = Command::new(frame);
             let ret_frame = match command {
+                Ok(Command::Zeroshot(cmd)) => match cmd {
+                    ZeroshotCommand::Ping(pong) => {
+                        if pong.is_none() {
+                            Frame::Pong
+                        } else {
+                            Frame::BulkStrings(pong.unwrap())
+                        }
+                    }
+                },
                 Ok(Command::Traverse(mut cmd)) => {
                     cmd.dispatch(self.thread_num, |key: &[u8]| {
                         self.dispatcher.determine_database(key)

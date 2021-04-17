@@ -21,6 +21,7 @@ use mset::*;
 use publish::*;
 use set::*;
 use subscribe::*;
+use tracing::trace;
 use traverse_command::*;
 use unsubscribe::*;
 
@@ -40,6 +41,7 @@ pub enum Command {
     Oneshot(OneshotCommand),
     Traverse(TraverseCommand),
     HoldOn(HoldOnCommand),
+    Zeroshot(ZeroshotCommand),
 }
 
 #[enum_dispatch]
@@ -75,6 +77,10 @@ pub enum AtomicCMD {
     Subscribe,
     Publish,
     Unsubscribe,
+}
+
+pub enum ZeroshotCommand {
+    Ping(Option<Bytes>),
 }
 
 #[enum_dispatch(AtomicCMD)]
@@ -204,9 +210,7 @@ impl ResultCollector {
             AsIs => {
                 let f = ret_rx.await.map_err(|e| Error::new(e))?;
                 let f_arr = match f {
-                    Frame::Arrays(arr) => {
-                        arr
-                    }
+                    Frame::Arrays(arr) => arr,
                     _ => panic!(),
                 };
                 self.ret.extend_from_slice(f_arr.as_slice());
@@ -261,6 +265,7 @@ impl Command {
     pub fn new(frame: Frame) -> Result<Self> {
         let mut parser = CommandParser::new(frame)?;
         let cmd_string = parser.next_bytes()?.ok_or_else(missing_operation)?;
+        trace!("cmd_string: {:?}", cmd_string);
         use Command::*;
         use CommandTable::*;
         match binary_lookup(rolling_hash(cmd_string.as_ref())?) {
@@ -274,6 +279,11 @@ impl Command {
             SUBSCRIBE => Ok(HoldOn(SubscribeDispatcher::new(&mut parser)?.into())),
             PUBLISH => Ok(HoldOn(PublishDispatcher::new(&mut parser)?.into())),
             UNSUBSCRIBE => Ok(HoldOn(UnsubDispatcher::new(&mut parser)?.into())),
+            PING => Ok(Zeroshot(ZeroshotCommand::Ping(if parser.len() == 0 {
+                None
+            } else {
+                parser.next_bytes()?
+            }))),
             UNIMPLEMENTED => Err(Error::new(CommandError::NotImplemented)),
         }
     }

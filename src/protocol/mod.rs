@@ -31,6 +31,7 @@ pub enum Frame {
     NullArray,
     _DetachSubscribeMode(usize),
     Message,
+    Pong,
 }
 
 impl From<Bytes> for Frame {
@@ -63,12 +64,13 @@ impl Frame {
         use Frame::*;
         match self {
             Frame::Ok | NullString | NullArray => 5,
-            Message => 10,
+            Message => MESSAGE_FRAME.len(),
             SimpleString(v) | Errors(v) => v.len() + 3,
             BulkStrings(v) => 5 + v.len() + len_of(v.len()),
             &Integers(v) => len_of(v) + 3,
             Arrays(v) => v.iter().fold(0, |r, f| r + f.raw_bytes_len()),
             _DetachSubscribeMode(_) => panic!(),
+            Pong => PONG_FRAME.len()
         }
     }
 
@@ -76,7 +78,8 @@ impl Frame {
         use Frame::*;
         match self {
             Frame::Ok | NullString | NullArray => 5,
-            Message => 10,
+            Message => MESSAGE_FRAME.len(),
+            Pong => PONG_FRAME.len(),
             SimpleString(v) | Errors(v) | BulkStrings(v) => {
                 if v.len() > SMALL_BYTES_THRESHOLD {
                     v.len()
@@ -94,7 +97,7 @@ impl Frame {
     fn msg_num(&self) -> usize {
         use Frame::*;
         match self {
-            Frame::Ok | NullString | NullArray | Message => 0,
+            Frame::Ok | NullString | NullArray | Message | Pong => 0,
             SimpleString(b) | Errors(b) | BulkStrings(b) => {
                 if b.len() > SMALL_BYTES_THRESHOLD {
                     1
@@ -112,7 +115,7 @@ impl Frame {
     pub fn len(&self) -> usize {
         use Frame::*;
         match self {
-            Frame::Ok | NullString | NullArray | Message => 0,
+            Frame::Ok | NullString | NullArray | Message | Pong => 0,
             SimpleString(b) | Errors(b) | BulkStrings(b) => b.len(),
             Arrays(v) => v.len(),
             Integers(_) => 0,
@@ -126,8 +129,8 @@ impl Frame {
 pub enum FrameError {
     #[error(display = "Incomplete")]
     Incomplete,
-    #[error(display = "Not Implemented")]
-    NotImplemented,
+    #[error(display = "Not Implemented: {}", _0)]
+    NotImplemented(u8),
     #[error(display = "Invalid: {}", _0)]
     Invalid(String),
     #[error(display = "{}", _0)]
@@ -151,6 +154,7 @@ type FrameResult<T> = std::result::Result<T, FrameError>;
 pub const NIL_STRING_FRAME: &'static [u8] = b"$-1\r\n";
 pub const NIL_ARRAY_FRAME: &'static [u8] = b"*-1\r\n";
 pub const MESSAGE_FRAME: &'static [u8] = b"+Message\r\n";
+pub const PONG_FRAME: &'static [u8] = b"+Pong\r\n";
 pub const OK_FRAME: &'static [u8] = b"+OK\r\n";
 const SIMPLE_STRING_MARK: u8 = b'+';
 const ERROR_MARK: u8 = b'-';

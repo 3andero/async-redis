@@ -2,11 +2,18 @@ use bytes::buf::UninitSlice;
 use bytes::{Buf, BufMut};
 use core::borrow::{Borrow, BorrowMut};
 use core::ops::{Deref, DerefMut};
+use std::fmt;
 
-#[derive(Debug)]
+// #[derive(Debug)]
 pub struct ReusableBuf {
     inner: Vec<u8>,
     start: usize,
+}
+
+impl fmt::Debug for ReusableBuf {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ReusableBuf {{ inner: {:?}, start: {:?}}}", String::from_utf8(self.inner.clone()), self.start)
+    }
 }
 
 impl ReusableBuf {
