@@ -1,4 +1,4 @@
-use crate::{cmd::*, protocol::Frame};
+use crate::{cmd::*, protocol::Frame, utils::VecMap};
 use bytes::*;
 use diagnose::DxCommand;
 use rand::seq::SliceRandom;
@@ -12,10 +12,7 @@ use tokio::{
 };
 use tracing::{debug, info, trace};
 
-#[derive(Debug)]
-pub enum TaskParam {
-    OneshotTask((OneshotCommand, oneshot::Sender<Frame>)),
-}
+pub type TaskParam = (AtomicCMD, oneshot::Sender<Frame>);
 
 #[derive(Debug)]
 pub struct Entry {
@@ -28,6 +25,7 @@ pub struct Entry {
 pub struct DB {
     pub database: FxHashMap<Bytes, Entry>,
     pub expiration: ExpirationSubModule,
+    pub subscribe: SubscriptionSubModule,
     pub id: usize,
     pub counter: u64,
     pub shutdown_tx: broadcast::Sender<()>,
@@ -56,6 +54,23 @@ impl ExpirationSubModule {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct SubscriptionSubModule {
+    pub chn_id_gen: usize,
+    pub channels: FxHashMap<Bytes, usize>,
+    pub channel_info: FxHashMap<usize, Bytes>,
+    pub subscriber: FxHashMap<usize, VecMap<u64>>,
+    pub subscriber_info: FxHashMap<u64, (mpsc::Sender<Frame>, VecMap<usize>)>,
+}
+
+impl SubscriptionSubModule {
+    pub fn new() -> Self {
+        Self {
+            ..Default::default()
+        }
+    }
+}
+
 impl DB {
     fn new(id: usize, shutdown_tx: broadcast::Sender<()>) -> Self {
         Self {
@@ -64,6 +79,7 @@ impl DB {
                 expiration: BTreeMap::new(),
                 when: None,
             },
+            subscribe: SubscriptionSubModule::new(),
             id,
             counter: 0,
             shutdown_tx,
@@ -117,6 +133,23 @@ impl DB {
     }
 }
 
+macro_rules! exec {
+    ($cmd:ident, $db:expr) => {{
+        use AtomicCMD::*;
+        match $cmd {
+            Get(c) => c.exec($db),
+            Set(c) => c.exec($db),
+            MGet(c) => c.exec($db),
+            MSet(c) => c.exec($db),
+            Dx(c) => c.exec($db),
+            Incr(c) => c.exec($db),
+            Subscribe(c) => c.exec($db),
+            Publish(c) => c.exec($db).await,
+            Unsubscribe(c) => c.exec($db).await,
+        }
+    }};
+}
+
 pub async fn database_manager(
     mut tasks_rx: mpsc::UnboundedReceiver<TaskParam>,
     shutdown_tx: broadcast::Sender<()>,
@@ -140,15 +173,15 @@ pub async fn database_manager(
                 if res.is_none() {
                     continue;
                 }
-                let (cmd, ret_tx) = match res.unwrap() {
-                    TaskParam::OneshotTask(v) => v,
-                };
+                let (cmd, ret_tx) = res.unwrap();
                 trace!("[{}] scheduling: {:?}, now: {:?}", taskid, &cmd, &now);
-                let _ = ret_tx.send(cmd.exec(&mut db));
+                trace!("db before: {:?}", db);
+                let _ = ret_tx.send(exec!(cmd, &mut db));
+                trace!("db after: {:?}", db);
             }
             _ = tokio::time::sleep_until(
-                when.map(|v| v.max(now + Duration::new(10, 0)))
-                    .unwrap_or(now + Duration::new(30, 0)),
+                when.map(|v| v.max(now + Duration::new(1000, 0)))
+                    .unwrap_or(now + Duration::new(3000, 0)),
             ) => {
                 debug!("[{}] task waked up, expirations: {:?}", taskid, db.expiration);
                 when = None;

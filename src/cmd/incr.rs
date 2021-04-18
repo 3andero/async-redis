@@ -38,7 +38,7 @@ impl Incr {
                     return Err(invalid_operation());
                 }
                 (parser.next_bytes()?.ok_or_else(missing_operand)?, -1)
-            },
+            }
             IncrVariant::DecrBy => {
                 if parser.len() > 2 {
                     return Err(invalid_operation());
@@ -48,18 +48,15 @@ impl Incr {
                 (key, by)
             }
         };
-        Ok(Self {
-            key,
-            by,
-        })
+        Ok(Self { key, by })
+    }
+
+    pub fn exec(self, db: &mut DB) -> Frame {
+        db.incr(&self.key, self.by)
     }
 }
 
 impl OneshotExecDB for Incr {
-    fn exec(self, db: &mut DB) -> Frame {
-        db.incr(&self.key, self.by)
-    }
-
     fn get_key(&self) -> &[u8] {
         &self.key.as_ref()
     }
@@ -93,3 +90,5 @@ impl DB {
             )
     }
 }
+
+impl AtomicCMDMarker for Incr {}

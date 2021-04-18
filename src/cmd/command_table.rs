@@ -11,7 +11,32 @@ pub enum CommandTable {
     INCR(IncrVariant),
     DX,
     SHUTDOWN,
+    SUBSCRIBE,
+    PUBLISH,
+    UNSUBSCRIBE,
+    PING,
     UNIMPLEMENTED,
+}
+
+pub fn binary_lookup(token: usize) -> CommandTable {
+    let (mut start, mut end) = (0, COMMAND_NUM);
+    let mut mi;
+    while start < end {
+        mi = (start + end) / 2;
+        if COMMAND_LOOKUP[mi].0 < token {
+            start = mi + 1;
+        } else {
+            end = mi;
+        }
+    }
+    if start == COMMAND_NUM {
+        return CommandTable::UNIMPLEMENTED;
+    }
+    if COMMAND_LOOKUP[start].0 != token {
+        return CommandTable::UNIMPLEMENTED;
+    } else {
+        return COMMAND_LOOKUP[start].1;
+    }
 }
 
 const GET: usize = rolling_hash_const(b"get");
@@ -30,8 +55,12 @@ const INCRBY: usize = rolling_hash_const(b"incrby");
 const DECRBY: usize = rolling_hash_const(b"decrby");
 const DX: usize = rolling_hash_const(b"dx");
 const SHUTDOWN: usize = rolling_hash_const(b"shutdown");
+const SUBSCRIBE: usize = rolling_hash_const(b"subscribe");
+const PUBLISH: usize = rolling_hash_const(b"publish");
+const PING: usize = rolling_hash_const(b"ping");
+const UNSUBSCRIBE: usize = rolling_hash_const(b"unsubscribe");
 
-pub const COMMAND_NUM: usize = 16;
+pub const COMMAND_NUM: usize = 20;
 
 const UNSORTED_TBL: [(usize, CommandTable); COMMAND_NUM] = [
     (GET, CommandTable::GET(GetVariant::Get)),
@@ -48,7 +77,11 @@ const UNSORTED_TBL: [(usize, CommandTable); COMMAND_NUM] = [
     (DECR, CommandTable::INCR(IncrVariant::Decr)),
     (INCRBY, CommandTable::INCR(IncrVariant::IncrBy)),
     (DECRBY, CommandTable::INCR(IncrVariant::DecrBy)),
+    (SUBSCRIBE, CommandTable::SUBSCRIBE),
+    (PUBLISH, CommandTable::PUBLISH),
+    (UNSUBSCRIBE, CommandTable::UNSUBSCRIBE),
     (DX, CommandTable::DX),
+    (PING, CommandTable::PING),
     (SHUTDOWN, CommandTable::SHUTDOWN),
 ];
 

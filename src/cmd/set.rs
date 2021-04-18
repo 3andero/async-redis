@@ -240,10 +240,8 @@ impl Set {
             }
         }
     }
-}
 
-impl OneshotExecDB for Set {
-    fn exec(self, db: &mut DB) -> Frame {
+    pub fn exec(self, db: &mut DB) -> Frame {
         db.counter += 1; // might not be necessary.
         let nounce = db.counter;
         let (expiration, keep_ttl) = match self.expiration {
@@ -262,7 +260,9 @@ impl OneshotExecDB for Set {
             self.get,
         )
     }
+}
 
+impl OneshotExecDB for Set {
     fn get_key(&self) -> &[u8] {
         &self.key.as_ref()
     }
@@ -396,3 +396,5 @@ impl DB {
         }
     }
 }
+
+impl AtomicCMDMarker for Set {}

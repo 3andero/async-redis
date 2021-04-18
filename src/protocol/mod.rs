@@ -29,6 +29,9 @@ pub enum Frame {
     Arrays(Vec<Frame>),
     Ok,
     NullArray,
+    _DetachSubscribeMode(usize),
+    Message,
+    Pong,
 }
 
 impl From<Bytes> for Frame {
@@ -58,51 +61,66 @@ impl From<Vec<Frame>> for Frame {
 
 impl Frame {
     fn raw_bytes_len(&self) -> usize {
+        use Frame::*;
         match self {
-            Frame::Ok | Frame::NullString | Frame::NullArray => 5,
-            Frame::SimpleString(v) | Frame::Errors(v) => v.len() + 3,
-            Frame::BulkStrings(v) => 5 + v.len() + len_of(v.len()),
-            &Frame::Integers(v) => len_of(v) + 3,
-            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.raw_bytes_len()),
+            Frame::Ok | NullString | NullArray => 5,
+            Message => MESSAGE_FRAME.len(),
+            SimpleString(v) | Errors(v) => v.len() + 3,
+            BulkStrings(v) => 5 + v.len() + len_of(v.len()),
+            &Integers(v) => len_of(v) + 3,
+            Arrays(v) => v.iter().fold(0, |r, f| r + f.raw_bytes_len()),
+            _DetachSubscribeMode(_) => panic!(),
+            Pong => PONG_FRAME.len()
         }
     }
 
     fn encode_msg_len(&self) -> usize {
+        use Frame::*;
         match self {
-            Frame::Ok | Frame::NullString | Frame::NullArray => 5,
-            Frame::SimpleString(v) | Frame::Errors(v) | Frame::BulkStrings(v) => {
+            Frame::Ok | NullString | NullArray => 5,
+            Message => MESSAGE_FRAME.len(),
+            Pong => PONG_FRAME.len(),
+            SimpleString(v) | Errors(v) | BulkStrings(v) => {
                 if v.len() > SMALL_BYTES_THRESHOLD {
                     v.len()
                 } else {
                     0
                 }
             }
-            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.encode_msg_len()),
-            Frame::Integers(_) => 0,
+            Arrays(v) => v.iter().fold(0, |r, f| r + f.encode_msg_len()),
+            Integers(_) => 0,
+            // internal use only, should never be encoded.
+            _DetachSubscribeMode(_) => panic!(),
         }
     }
 
     fn msg_num(&self) -> usize {
+        use Frame::*;
         match self {
-            Frame::Ok | Frame::NullString | Frame::NullArray => 0,
-            Frame::SimpleString(b) | Frame::Errors(b) | Frame::BulkStrings(b) => {
+            Frame::Ok | NullString | NullArray | Message | Pong => 0,
+            SimpleString(b) | Errors(b) | BulkStrings(b) => {
                 if b.len() > SMALL_BYTES_THRESHOLD {
                     1
                 } else {
                     0
                 }
             }
-            Frame::Arrays(v) => v.iter().fold(0, |r, f| r + f.msg_num()),
-            Frame::Integers(_) => 0,
+            Arrays(v) => v.iter().fold(0, |r, f| r + f.msg_num()),
+            Integers(_) => 0,
+            // internal use only, should never be encoded.
+            _DetachSubscribeMode(_) => panic!(),
         }
     }
 
     pub fn len(&self) -> usize {
+        use Frame::*;
         match self {
-            Frame::Ok | Frame::NullString | Frame::NullArray => 0,
-            Frame::SimpleString(b) | Frame::Errors(b) | Frame::BulkStrings(b) => b.len(),
-            Frame::Arrays(v) => v.len(),
-            Frame::Integers(_) => 0,
+            Frame::Ok | NullString | NullArray | Message | Pong => 0,
+            SimpleString(b) | Errors(b) | BulkStrings(b) => b.len(),
+            Arrays(v) => v.len(),
+            Integers(_) => 0,
+            // internal use only, should never be encoded.
+            _DetachSubscribeMode(_) => panic!(),
         }
     }
 }
@@ -111,8 +129,8 @@ impl Frame {
 pub enum FrameError {
     #[error(display = "Incomplete")]
     Incomplete,
-    #[error(display = "Not Implemented")]
-    NotImplemented,
+    #[error(display = "Not Implemented: {}", _0)]
+    NotImplemented(u8),
     #[error(display = "Invalid: {}", _0)]
     Invalid(String),
     #[error(display = "{}", _0)]
@@ -135,6 +153,8 @@ type FrameResult<T> = std::result::Result<T, FrameError>;
 
 pub const NIL_STRING_FRAME: &'static [u8] = b"$-1\r\n";
 pub const NIL_ARRAY_FRAME: &'static [u8] = b"*-1\r\n";
+pub const MESSAGE_FRAME: &'static [u8] = b"+Message\r\n";
+pub const PONG_FRAME: &'static [u8] = b"+Pong\r\n";
 pub const OK_FRAME: &'static [u8] = b"+OK\r\n";
 const SIMPLE_STRING_MARK: u8 = b'+';
 const ERROR_MARK: u8 = b'-';

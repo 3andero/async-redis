@@ -1,22 +1,20 @@
-use crate::{cmd::*, db::DB};
-use anyhow::Result;
+use crate::{cmd::*, db::DB, impl_traverse_command, new_traverse_command, *};
+use async_redis::*;
 
 #[derive(Debug, Clone)]
 pub struct MSet {
-    pairs: Vec<MiniCommand>,
+    cmds: Vec<MiniCommand>,
 }
 
 impl MSet {
-    pub fn new(pairs: Vec<MiniCommand>) -> Self {
-        Self { pairs }
+    pub fn new(cmds: Vec<MiniCommand>) -> Self {
+        Self { cmds }
     }
-}
 
-impl OneshotExecDB for MSet {
-    fn exec(self, db: &mut DB) -> Frame {
+    pub fn exec(self, db: &mut DB) -> Frame {
         let nounce0 = db.counter;
-        db.counter += self.pairs.len() as u64;
-        self.pairs.into_iter().fold(nounce0 + 1, |i, cmd| {
+        db.counter += self.cmds.len() as u64;
+        self.cmds.into_iter().fold(nounce0 + 1, |i, cmd| {
             if let MiniCommand::Pair((k, v)) = cmd {
                 db.set_lite(k, v, i, None);
             }
@@ -24,78 +22,24 @@ impl OneshotExecDB for MSet {
         });
         Frame::Ok
     }
+}
 
+impl OneshotExecDB for MSet {
     fn get_key(&self) -> &[u8] {
-        &self.pairs[0].get_key()
+        &self.cmds[0].get_key()
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MSetDispatcher {
-    cmds: Vec<MiniCommand>,
-    db_amount: usize,
-    cmds_tbl: Vec<Vec<MiniCommand>>,
-    len: usize,
-    first_valid: bool,
-}
+#[define_traverse_command("N:1")]
+#[derive(Debug, Clone, Default)]
+pub struct MSetDispatcher {}
 
-impl TraverseExecDB for MSetDispatcher {
-    fn next_command(&mut self) -> IDCommandPair {
-        let id = self.cmds_tbl.len() - 1;
-        let pairs = self.cmds_tbl.pop().unwrap();
-        // let order = self.order_tbl.pop().unwrap();
-        if pairs.len() > 0 {
-            return (
-                id,
-                Some((
-                    MSet::new(pairs).into(),
-                    if self.first_valid {
-                        self.first_valid = false;
-                        MergeStrategy::Insert(0)
-                    } else {
-                        MergeStrategy::Drop
-                    },
-                )),
-            );
-        } else {
-            return (id, None);
-        }
-    }
+use crate::default_pop;
+impl_traverse_command!(
+    for cmd: MSet = MSetDispatcher((KeyValue)+).default_pop!() {
+        cmd >> DB
+    },
+    DB >> 1 Frame
+);
 
-    fn len(&self) -> usize {
-        1
-    }
-
-    fn init_tbls(&mut self, vec: &Vec<usize>) {
-        self.cmds_tbl = vec.iter().map(|v| Vec::with_capacity(*v)).collect();
-    }
-
-    fn iter_data(&self) -> Iter<MiniCommand> {
-        self.cmds.iter()
-    }
-
-    fn move_last_to(&mut self, db_id: usize, _: usize) {
-        self.cmds_tbl[db_id].push(self.cmds.pop().unwrap());
-    }
-}
-
-impl MSetDispatcher {
-    pub fn new(parser: &mut CommandParser) -> Result<MSetDispatcher> {
-        let len = parser.len() / 2;
-        if len == 0 {
-            return Err(Error::new(CommandError::MissingOperand));
-        }
-        let mut pairs = Vec::with_capacity(len);
-        while let Some(p) = parser.next_kv_pair()? {
-            pairs.push(p.into());
-        }
-
-        Ok(Self {
-            cmds: pairs,
-            db_amount: 0,
-            cmds_tbl: Vec::new(),
-            len,
-            first_valid: true,
-        })
-    }
-}
+impl AtomicCMDMarker for MSet {}
