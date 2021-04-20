@@ -1,17 +1,17 @@
-use crate::{protocol::*, utils::get_integer};
+use crate::{protocol::*};
 use bytes::Bytes;
 use reusable_buf::ReusableBuf;
-use std::io::Cursor;
 
 #[derive(Debug)]
 pub struct IntermediateToken {
     token_type: u8,
     expected_len: Option<usize>,
-    recognized_len: Option<u64>,
     is_recognized: bool,
     is_complete: bool,
     data: Option<Frame>,
-    tmp_buf: Option<BytesMut>,
+    tmp_buf: BytesMut,
+    num_buf: i64,
+    num_sign: i8,
 }
 
 impl IntermediateToken {
@@ -20,11 +20,12 @@ impl IntermediateToken {
         Self {
             token_type,
             expected_len: None,
-            recognized_len: None,
             is_recognized: false,
             is_complete: false,
             data: None,
-            tmp_buf: None,
+            tmp_buf: BytesMut::new(),
+            num_buf: 0,
+            num_sign: 0,
         }
     }
 
@@ -39,34 +40,52 @@ impl IntermediateToken {
         if buf.len() < 2 {
             return Err(FrameError::Incomplete);
         }
-        let mut cursor = Cursor::new(&buf[..]);
-        if self.recognized_len.is_some() {
-            let pos = self.recognized_len.take().unwrap();
-            // println!("prev position: {}", pos);
-            if cursor.remaining() < pos as usize {
-                return Err(FrameError::Invalid(format!(
-                    "[0] pos: {}, buf: {:?}",
-                    pos, buf
-                )));
+        let (length, is_complete) = get_line(&buf[..]);
+        // println!("next_line: {:?}", Bytes::copy_from_slice(next_line));
+        if is_complete {
+            let ret = if self.tmp_buf.len() == 0 {
+                Ok(Bytes::copy_from_slice(&buf[..length]))
             } else {
-                // println!("set pos: {}", pos);
-                cursor.set_position(pos);
+                self.tmp_buf.extend_from_slice(&buf[..length]);
+                Ok(std::mem::take(&mut self.tmp_buf).freeze())
+            };
+
+            buf.advance(length + 2);
+            return ret;
+        }
+
+        self.tmp_buf.extend_from_slice(&buf[..length]);
+        buf.advance(length);
+        // println!("buf remains: {:?}", buf);
+        return Err(FrameError::Incomplete);
+    }
+
+    fn read_i64(&mut self, buf: &mut ReusableBuf) -> FrameResult<i64> {
+        if self.num_sign == 0 {
+            if buf[0] != b'-' {
+                self.num_sign = 1;
+            } else {
+                self.num_sign = -1;
+                buf.advance(1);
             }
         }
-        let next_line = get_line(&mut cursor).map_err(|e| match e {
-            FrameError::Incomplete => {
-                self.recognized_len = Some(cursor.position());
-                e
+
+        for i in 0..buf.len() - 1 {
+            if buf[i] >= b'0' && buf[i] <= b'9' {
+                self.num_buf = self.num_buf * 10 + (buf[i] - b'0') as i64;
+            } else if buf[i] == b'\r' && buf[i + 1] == b'\n' {
+                buf.advance(i + 2);
+                let res = self.num_buf * self.num_sign as i64;
+                self.num_sign = 0;
+                self.num_buf = 0;
+                return Ok(res);
+            } else {
+                return Err(FrameError::Invalid(String::from("char")));
             }
-            e => e,
-        })?;
-        // println!("next_line: {:?}", Bytes::copy_from_slice(next_line));
-        let ret = Ok(Bytes::copy_from_slice(next_line));
-        let advance_pos = (cursor.position() + 2) as usize; // double check
-        drop(cursor);
-        buf.advance(advance_pos as usize);
-        // println!("buf remains: {:?}", buf);
-        ret
+        }
+
+        buf.advance(buf.len() - 1);
+        return Err(FrameError::Incomplete);
     }
 
     fn skip_to_next_line(&mut self, buf: &mut ReusableBuf) -> FrameResult<()> {
@@ -88,24 +107,16 @@ impl IntermediateToken {
         let span = self.expected_len.unwrap();
         if buf.len() < span + 2 {
             let max_copy_cnt = std::cmp::min(buf.len(), span);
-            match &mut self.tmp_buf {
-                Some(b) => {
-                    b.extend_from_slice(&buf[..max_copy_cnt]);
-                    self.expected_len = Some(span - max_copy_cnt);
-                    buf.advance(max_copy_cnt);
-                    buf.reserve(span - max_copy_cnt + 2);
-                }
-                None => {
-                    panic!("we should've already initialized the buffer.");
-                }
-            }
+            self.tmp_buf.extend_from_slice(&buf[..max_copy_cnt]);
+            self.expected_len = Some(span - max_copy_cnt);
+            buf.advance(max_copy_cnt);
+            buf.reserve(span - max_copy_cnt + 2);
             return Err(FrameError::Incomplete);
         }
         if &buf.chunk()[span..span + 2] == b"\r\n" {
-            let mut tmp_buf = self.tmp_buf.take().unwrap();
-            tmp_buf.extend_from_slice(&buf[..span]);
+            self.tmp_buf.extend_from_slice(&buf[..span]);
             buf.advance(span + 2);
-            return Ok(tmp_buf.freeze());
+            return Ok(std::mem::take(&mut self.tmp_buf).freeze());
         } else {
             return Err(FrameError::Invalid(String::from("[1]")));
         }
@@ -126,9 +137,7 @@ impl IntermediateToken {
             }
             BULK_STRING_MARK => {
                 if self.expected_len.is_none() {
-                    let next_line = self.read_line(buf)?;
-                    let maybe_len =
-                        get_integer(&next_line).map_err(|e| FrameError::Invalid(e.to_string()))?;
+                    let maybe_len = self.read_i64(buf)?;
                     if maybe_len < 0 {
                         self.is_recognized = true;
                         self.is_complete = true;
@@ -136,7 +145,7 @@ impl IntermediateToken {
                         return Ok(());
                     } else {
                         self.expected_len = Some(maybe_len as usize);
-                        self.tmp_buf = Some(BytesMut::with_capacity(maybe_len as usize));
+                        self.tmp_buf = BytesMut::with_capacity(maybe_len as usize);
                     }
                 }
 
@@ -145,17 +154,12 @@ impl IntermediateToken {
                 self.is_recognized = true;
             }
             INTEGER_MARK => {
-                let next_line = self.read_line(buf)?;
-                self.data = Some(Frame::Integers(
-                    get_integer(&next_line).map_err(|e| FrameError::Invalid(e.to_string()))?,
-                ));
+                self.data = Some(Frame::Integers(self.read_i64(buf)?));
                 self.is_complete = true;
                 self.is_recognized = true;
             }
             ARRAY_MARK => {
-                let next_line = self.read_line(buf)?;
-                let maybe_len =
-                    get_integer(&next_line).map_err(|e| FrameError::Invalid(e.to_string()))?;
+                let maybe_len = self.read_i64(buf)?;
                 if maybe_len < 0 {
                     self.is_recognized = true;
                     self.is_complete = true;
@@ -206,22 +210,20 @@ impl IntermediateToken {
     }
 }
 
-//
-fn get_line<'a>(cursor: &mut Cursor<&'a [u8]>) -> FrameResult<&'a [u8]> {
-    if cursor.remaining() < 2 {
-        return Err(FrameError::Incomplete);
+fn get_line<'a>(buf: &'a [u8]) -> (usize, bool) {
+    if buf.remaining() < 2 {
+        return (0, false);
     }
-    let start = cursor.position() as usize;
-    let end = cursor.get_ref().len() - 1;
+
+    let end = buf.len() - 1;
     // println!("get_line start {}, end {}", start, end);
 
-    for i in start..end {
-        if cursor.get_ref()[i] == b'\r' && cursor.get_ref()[i + 1] == b'\n' {
-            cursor.set_position(i as u64);
-            return Ok(&cursor.get_ref()[..i]);
+    for i in 0..end {
+        if buf[i] == b'\r' && buf[i + 1] == b'\n' {
+            return (i, true);
         }
     }
 
-    cursor.set_position(end as u64);
-    Err(FrameError::Incomplete)
+    let tail = end + (buf[end] != b'\r') as usize;
+    (tail, false)
 }
