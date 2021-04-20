@@ -26,6 +26,11 @@ impl IntermediateParser {
                 if buf.len() == 0 {
                     return Err(FrameError::Incomplete);
                 }
+                if self.token_stack.len() == 2 {
+                    return Err(FrameError::Invalid(String::from(
+                        "token stack is full, which is unprecedented",
+                    )));
+                }
                 let token_type = buf[0];
                 buf.advance(1);
                 self.token_stack.push(IntermediateToken::new(token_type));
@@ -36,6 +41,8 @@ impl IntermediateParser {
                 .last_mut()
                 .unwrap()
                 .consume_raw_bytes(buf)?;
+
+            buf.slide();
 
             while !self.token_stack.last_mut().unwrap().has_token_remain() {
                 // println!("stack: {:?}", self.token_stack);

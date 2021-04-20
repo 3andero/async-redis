@@ -11,7 +11,6 @@ use tracing::*;
 #[derive(Debug)]
 pub struct Connection {
     stream: TcpStream,
-    // buf: ReusableBuf,
     pub id: u64,
 }
 
@@ -19,20 +18,8 @@ impl Connection {
     pub fn new(stream: TcpStream, id: u64) -> Self {
         Self {
             stream,
-            // buf: ReusableBuf::new(),
             id,
         }
-    }
-
-    pub fn refresh(&mut self, stream: TcpStream, id: u64) {
-        self.stream = stream;
-        self.id = id;
-        // self.buf.reset();
-    }
-
-    pub async fn close_connection(&mut self) {
-        debug!("<{}>closing previous connection", self.id);
-        let _ = self.stream.shutdown().await;
     }
 
     // #[instrument(skip(self))]

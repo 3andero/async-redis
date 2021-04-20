@@ -2,7 +2,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     future::Future,
     hash::{Hash, Hasher},
-    sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering::*},
+    sync::atomic::{AtomicU64, AtomicUsize},
     sync::Arc,
 };
 
@@ -21,7 +21,6 @@ use crate::{
 };
 
 const BUFSIZE: usize = 50;
-const ARRBUFSIZE: usize = 500;
 
 #[allow(dead_code)]
 fn calculate_hash<T: Hash>(t: &T) -> usize {
@@ -98,58 +97,29 @@ pub struct Listener {
     shutdown_complete_tx: mpsc::Sender<()>,
 }
 
-// #[instrument(skip(handler, sender))]
-async fn recycle_handler(mut handler: Handler, sender: mpsc::Sender<Handler>) -> bool {
-    debug!("[{}]: entered", handler.id);
-    debug!("[{}]: send to recycle channel", handler.id);
-    let id = handler.id;
-    handler.connection.close_connection().await;
-    let x = sender.try_send(handler).is_ok();
-    debug!("[{}]: {}", id, if x { "recycled" } else { "discarded" });
-    return x;
-}
-
 impl Listener {
     // #[instrument(skip(self))]
     async fn run(&self) -> Result<()> {
         let mut float_num: u64 = 0;
         let mut conn_id: u64 = 0;
-        let (recycle_tx, mut recycle_rx) = mpsc::channel(1000);
-        let channel_counter = Arc::new(AtomicU32::new(0));
         info!("Server Started");
         loop {
             conn_id += 1;
             let (stream, _) = self.listener.accept().await?;
             debug!("<{}>: stream accepted", conn_id);
 
-            debug!(
-                "<{}>: recycle_rx: {:?}, channel_counter: {:?}",
-                conn_id, recycle_rx, channel_counter
-            );
-            let mut handler = if channel_counter
-                .fetch_update(SeqCst, Relaxed, |v| if v > 0 { Some(v - 1) } else { None })
-                .is_ok()
-            {
-                let mut ret: Handler = recycle_rx.recv().await.unwrap();
-                debug!("<{}>: recv succeed, handler[{}]", conn_id, ret.id);
-                ret.connection.refresh(stream, conn_id);
-                ret
-            } else {
-                let conn = Connection::new(stream, conn_id);
-                float_num += 1;
-                debug!("<{}>: new handler[{}]", conn_id, float_num);
-                Handler {
-                    connection: conn,
-                    dispatcher: self.dispatcher.clone(),
-                    shutdown_begin: Shutdown::new(self.shutdown_begin_tx.subscribe()),
-                    shutdown_complete_tx: self.shutdown_complete_tx.clone(),
-                    id: conn_id,
-                    thread_num: self.dispatcher.num_threads,
-                }
+            let conn = Connection::new(stream, conn_id);
+            float_num += 1;
+            debug!("<{}>: new handler[{}]", conn_id, float_num);
+            let mut handler = Handler {
+                connection: conn,
+                dispatcher: self.dispatcher.clone(),
+                shutdown_begin: Shutdown::new(self.shutdown_begin_tx.subscribe()),
+                shutdown_complete_tx: self.shutdown_complete_tx.clone(),
+                id: conn_id,
+                thread_num: self.dispatcher.num_threads,
             };
 
-            let recycle_tx_copy = recycle_tx.clone();
-            let channel_counter_copy = channel_counter.clone();
             tokio::spawn(async move {
                 match handler.run().await {
                     Err(e) => {
@@ -167,11 +137,6 @@ impl Listener {
                         }
                     }
                     _ => (),
-                }
-
-                let ret = recycle_handler(handler, recycle_tx_copy).await;
-                if ret {
-                    channel_counter_copy.fetch_add(1, Release);
                 }
             });
         }
@@ -231,7 +196,7 @@ impl Handler {
 
     // #[instrument(skip(self))]
     pub async fn run(&mut self) -> Result<()> {
-        let mut buf =  ReusableBuf::new();
+        let mut buf = ReusableBuf::new();
         while !self.shutdown_begin.is_shutdown() {
             let opt_frame = tokio::select! {
                 _ = self.shutdown_begin.recv() => {
@@ -311,7 +276,10 @@ impl Handler {
                             self.traverse_exec(&mut cmd).await?
                         } else {
                             let mut sub_state = vec![false; self.thread_num];
-                            match self.handle_hold_on_cmd(&mut cmd, &mut sub_state, &mut buf).await {
+                            match self
+                                .handle_hold_on_cmd(&mut cmd, &mut sub_state, &mut buf)
+                                .await
+                            {
                                 Ok(_) => self.unsubscribe_all(sub_state).await,
                                 Err(e) => {
                                     self.unsubscribe_all(sub_state).await;
@@ -343,7 +311,7 @@ impl Handler {
         &mut self,
         cmd: &mut HoldOnCommand,
         sub_state: &mut Vec<bool>,
-        buf: &mut ReusableBuf
+        buf: &mut ReusableBuf,
     ) -> Result<()> {
         trace!(
             "[{}]<{}>enter handle_hold_on_cmd",

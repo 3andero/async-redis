@@ -5,7 +5,7 @@ use core::ops::{Deref, DerefMut};
 use std::fmt;
 
 use arrayvec::ArrayVec;
-const BUFSIZE: usize = 500;
+const BUFSIZE: usize = 10000;
 
 // #[derive(Debug)]
 pub struct ReusableBuf {
@@ -34,13 +34,6 @@ impl ReusableBuf {
 
     pub fn len(&self) -> usize {
         self.inner.len() - self.start
-    }
-
-    pub fn reset(&mut self) {
-        self.start = 0;
-        unsafe {
-            self.inner.set_len(0);
-        }
     }
 
     fn remaining_space_straight(&self) -> usize {
