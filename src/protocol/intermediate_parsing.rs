@@ -61,6 +61,9 @@ impl IntermediateToken {
     }
 
     fn read_i64(&mut self, buf: &mut ReusableBuf) -> FrameResult<i64> {
+        if buf.len() == 0 {
+            return Err(FrameError::Incomplete);
+        }
         if self.num_sign == 0 {
             if buf[0] != b'-' {
                 self.num_sign = 1;
