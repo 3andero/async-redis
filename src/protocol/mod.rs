@@ -188,7 +188,7 @@ macro_rules! FrameTests {
         let mut buf = reusable_buf::ReusableBuf::new();
         for param in params.iter_mut() {
             buf.reset();
-            buf.reserve(param.len());
+            // buf.reserve(param.len());
             buf.put_slice(&param.as_bytes());
             let mut parser = decode::IntermediateParser::new();
             let (res, err_msg) = match parser.parse(&mut buf) {

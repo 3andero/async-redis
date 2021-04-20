@@ -3,15 +3,17 @@ use crate::{protocol::*, utils::get_integer};
 use intermediate_parsing::*;
 use reusable_buf::*;
 
+use arrayvec::ArrayVec;
+
 #[derive(Debug)]
 pub struct IntermediateParser {
-    token_stack: Vec<IntermediateToken>,
+    token_stack: arrayvec::ArrayVec<IntermediateToken, 2>,
 }
 
 impl IntermediateParser {
     pub fn new() -> Self {
         Self {
-            token_stack: Vec::with_capacity(2),
+            token_stack: ArrayVec::new(),
         }
     }
 

@@ -6,6 +6,9 @@ use std::{
     sync::Arc,
 };
 
+use crate::protocol::*;
+use reusable_buf::ReusableBuf;
+
 use anyhow::Error;
 
 use bytes::Bytes;
@@ -18,6 +21,7 @@ use crate::{
 };
 
 const BUFSIZE: usize = 50;
+const ARRBUFSIZE: usize = 500;
 
 #[allow(dead_code)]
 fn calculate_hash<T: Hash>(t: &T) -> usize {
@@ -227,12 +231,13 @@ impl Handler {
 
     // #[instrument(skip(self))]
     pub async fn run(&mut self) -> Result<()> {
+        let mut buf =  ReusableBuf::new();
         while !self.shutdown_begin.is_shutdown() {
             let opt_frame = tokio::select! {
                 _ = self.shutdown_begin.recv() => {
                     return Ok(());
                 }
-                res = self.connection.read_frame() => res?
+                res = self.connection.read_frame(&mut buf) => res?
             };
 
             trace!(
@@ -306,7 +311,7 @@ impl Handler {
                             self.traverse_exec(&mut cmd).await?
                         } else {
                             let mut sub_state = vec![false; self.thread_num];
-                            match self.handle_hold_on_cmd(&mut cmd, &mut sub_state).await {
+                            match self.handle_hold_on_cmd(&mut cmd, &mut sub_state, &mut buf).await {
                                 Ok(_) => self.unsubscribe_all(sub_state).await,
                                 Err(e) => {
                                     self.unsubscribe_all(sub_state).await;
@@ -338,6 +343,7 @@ impl Handler {
         &mut self,
         cmd: &mut HoldOnCommand,
         sub_state: &mut Vec<bool>,
+        buf: &mut ReusableBuf
     ) -> Result<()> {
         trace!(
             "[{}]<{}>enter handle_hold_on_cmd",
@@ -356,7 +362,7 @@ impl Handler {
                 _ = self.shutdown_begin.recv() => {
                     return Ok(());
                 }
-                res = self.connection.read_frame() => {
+                res = self.connection.read_frame(buf) => {
                     match res? {
                         Some(f) => f,
                         None => {

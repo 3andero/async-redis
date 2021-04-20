@@ -4,22 +4,30 @@ use core::borrow::{Borrow, BorrowMut};
 use core::ops::{Deref, DerefMut};
 use std::fmt;
 
+use arrayvec::ArrayVec;
+const BUFSIZE: usize = 500;
+
 // #[derive(Debug)]
 pub struct ReusableBuf {
-    inner: Vec<u8>,
+    inner: ArrayVec<u8, BUFSIZE>,
     start: usize,
 }
 
 impl fmt::Debug for ReusableBuf {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ReusableBuf {{ inner: {:?}, start: {:?}}}", String::from_utf8(self.inner.clone()), self.start)
+        write!(
+            f,
+            "ReusableBuf {{ inner: {:?}, start: {:?}}}",
+            String::from_utf8(Vec::from(&self.inner[..])),
+            self.start
+        )
     }
 }
 
 impl ReusableBuf {
     pub fn new() -> Self {
         Self {
-            inner: Vec::new(),
+            inner: ArrayVec::new(),
             start: 0,
         }
     }
@@ -40,45 +48,21 @@ impl ReusableBuf {
         self.inner.capacity() - self.inner.len()
     }
 
-    pub fn reserve(&mut self, additional: usize) {
-        if self.remaining_space_straight() >= additional {
-            // println!("no need to allocate.");
-            return;
+    pub fn slide(&mut self) {
+        for i in self.start..self.inner.len() {
+            self.inner[i - self.start] = self.inner[i];
         }
-
-        if self.start != 0 && (self.len() + additional) <= self.inner.capacity() {
-            // println!(
-            //     "reuse previous space. current start: {}, current len: {}",
-            //     self.start,
-            //     self.len()
-            // );
-            for i in self.start..self.inner.len() {
-                self.inner[i - self.start] = self.inner[i];
-            }
-            unsafe {
-                self.inner.set_len(self.inner.len() - self.start);
-            }
-            self.start = 0;
-        } else {
-            // println!(
-            //     "allocate new space. current start: {}, current len: {}, require: {}",
-            //     self.start,
-            //     self.len(),
-            //     self.len() + additional,
-            // );
-            let mut new_vec = Vec::new();
-            new_vec.reserve_exact(self.len() + additional);
-            new_vec.extend_from_slice(self.as_ref());
-            self.inner = new_vec;
-            self.start = 0;
+        unsafe {
+            self.inner.set_len(self.inner.len() - self.start);
         }
+        self.start = 0;
     }
 
-    pub fn extend_from_slice(&mut self, other: &[u8]) {
-        let cnt = other.len();
-        self.reserve(cnt);
-        self.inner.extend_from_slice(other);
-    }
+    // pub fn extend_from_slice(&mut self, other: &[u8]) {
+    //     let cnt = other.len();
+    //     self.reserve(cnt);
+    //     self.inner.extend_from_slice(other);
+    // }
 }
 
 unsafe impl BufMut for ReusableBuf {
@@ -104,40 +88,40 @@ unsafe impl BufMut for ReusableBuf {
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut UninitSlice {
-        if self.remaining_space_straight() == 0 {
-            self.reserve(64); // Grow the vec
-        }
+        let cap = self.inner.capacity();
+        let len = self.len();
 
-        self.inner.chunk_mut()
+        let ptr = self.as_mut_ptr();
+        unsafe { &mut UninitSlice::from_raw_parts_mut(ptr, cap)[len..] }
     }
 
     // Specialize these methods so they can skip checking `remaining_mut`
     // and `advance_mut`.
-    fn put<T: Buf>(&mut self, mut src: T)
-    where
-        Self: Sized,
-    {
-        // In case the src isn't contiguous, reserve upfront
-        self.reserve(src.remaining());
+    // fn put<T: Buf>(&mut self, mut src: T)
+    // where
+    //     Self: Sized,
+    // {
+    //     // In case the src isn't contiguous, reserve upfront
+    //     self.reserve(src.remaining());
 
-        while src.has_remaining() {
-            let l;
+    //     while src.has_remaining() {
+    //         let l;
 
-            // a block to contain the src.bytes() borrow
-            {
-                let s = src.chunk();
-                l = s.len();
-                self.inner.extend_from_slice(s);
-            }
+    //         // a block to contain the src.bytes() borrow
+    //         {
+    //             let s = src.chunk();
+    //             l = s.len();
+    //             self.inner.extend_from_slice(s);
+    //         }
 
-            src.advance(l);
-        }
-    }
+    //         src.advance(l);
+    //     }
+    // }
 
-    #[inline]
-    fn put_slice(&mut self, src: &[u8]) {
-        self.extend_from_slice(src);
-    }
+    // #[inline]
+    // fn put_slice(&mut self, src: &[u8]) {
+    //     self.extend_from_slice(src);
+    // }
 }
 
 impl Buf for ReusableBuf {

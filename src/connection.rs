@@ -1,7 +1,7 @@
 use crate::protocol::*;
 use anyhow::{Error, Result};
 use futures::future;
-use reusable_buf::ReusableBuf;
+use reusable_buf::{ReusableBuf};
 use std::io::IoSlice;
 use std::pin::Pin;
 use tokio::io::*;
@@ -11,7 +11,7 @@ use tracing::*;
 #[derive(Debug)]
 pub struct Connection {
     stream: TcpStream,
-    buf: ReusableBuf,
+    // buf: ReusableBuf,
     pub id: u64,
 }
 
@@ -19,7 +19,7 @@ impl Connection {
     pub fn new(stream: TcpStream, id: u64) -> Self {
         Self {
             stream,
-            buf: ReusableBuf::new(),
+            // buf: ReusableBuf::new(),
             id,
         }
     }
@@ -27,7 +27,7 @@ impl Connection {
     pub fn refresh(&mut self, stream: TcpStream, id: u64) {
         self.stream = stream;
         self.id = id;
-        self.buf.reset();
+        // self.buf.reset();
     }
 
     pub async fn close_connection(&mut self) {
@@ -36,11 +36,11 @@ impl Connection {
     }
 
     // #[instrument(skip(self))]
-    pub async fn read_frame(&mut self) -> Result<Option<Frame>> {
+    pub async fn read_frame(&mut self, buf: &mut ReusableBuf) -> Result<Option<Frame>> {
         let mut parser = decode::IntermediateParser::new();
         loop {
-            trace!("<{}>buffer: {:?}", self.id, &self.buf);
-            match parser.parse(&mut self.buf) {
+            trace!("<{}>buffer: {:?}", self.id, buf);
+            match parser.parse(buf) {
                 Err(FrameError::Incomplete) => {}
                 Err(FrameError::Other(e)) => {
                     return Err(e);
@@ -55,9 +55,8 @@ impl Connection {
                     return Ok(Some(frame));
                 }
             }
-
-            if self.stream.read_buf(&mut self.buf).await? == 0 {
-                if self.buf.len() == 0 {
+            if self.stream.read_buf(buf).await? == 0 {
+                if buf.len() == 0 {
                     return Ok(None);
                 } else {
                     return Err(anyhow::anyhow!("Closed Unexpectedly"));
