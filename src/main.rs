@@ -19,6 +19,7 @@ mod protocol;
 mod server;
 mod shutdown;
 mod utils;
+mod simd;
 use clap::{App, Arg};
 
 #[tokio::main]
