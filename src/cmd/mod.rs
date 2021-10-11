@@ -1,33 +1,47 @@
 pub mod command_parser;
+pub mod command_table;
 pub mod diagnose;
 pub mod get;
 pub mod incr;
 pub mod mget;
 pub mod mset;
+pub mod publish;
 pub mod set;
+pub mod subscribe;
+pub mod traverse_command;
+pub mod unsubscribe;
 
 use command_parser::*;
+use command_table::*;
 use diagnose::*;
 use get::*;
 use incr::*;
 use mget::*;
 use mset::*;
+use publish::*;
 use set::*;
+use subscribe::*;
+use tracing::trace;
+use traverse_command::*;
+use unsubscribe::*;
 
 use anyhow::{Error, Result};
-use utils::rolling_hash_const;
-use std::slice::Iter;
+use tokio::sync::{mpsc, oneshot};
+use utils::{rolling_hash, rolling_hash_const};
 
 use crate::{db::DB, protocol::Frame, utils};
 
 use bytes::*;
 use enum_dispatch::*;
 
+use std::sync::{atomic::AtomicUsize, Arc};
+
 #[allow(dead_code)]
 pub enum Command {
     Oneshot(OneshotCommand),
     Traverse(TraverseCommand),
     HoldOn(HoldOnCommand),
+    Zeroshot(ZeroshotCommand),
 }
 
 #[enum_dispatch]
@@ -35,90 +49,175 @@ pub enum Command {
 pub enum OneshotCommand {
     Get,
     Set,
-    MGet,
-    MSet,
     Dx,
     Incr,
 }
 
-#[enum_dispatch(OneshotCommand)]
-pub trait OneshotExecDB {
-    fn exec(self, db: &mut DB) -> Frame;
-    fn get_key(&self) -> &[u8];
-}
-
-#[enum_dispatch]
-#[derive(Debug, Clone)]
-pub enum TraverseCommand {
-    MSet(MSetDispatcher),
-    MGet(MGetDispatcher),
-    Dx(DxDispatcher),
-}
-
-#[enum_dispatch]
-#[derive(Debug, Clone)]
-pub enum MiniCommand {
-    Pair(_Pair),
-    Single(_Single),
-}
-
-#[enum_dispatch(MiniCommand)]
-pub trait MiniCommandTrait {
-    fn get_key(&self) -> &[u8];
-}
-
-pub type _Pair = (Bytes, Frame);
-
-impl MiniCommandTrait for _Pair {
-    fn get_key(&self) -> &[u8] {
-        return self.0.as_ref();
-    }
-}
-
-pub type _Single = Bytes;
-
-impl MiniCommandTrait for _Single {
-    fn get_key(&self) -> &[u8] {
-        return self.as_ref();
-    }
-}
-
-type IDCommandPair = (usize, Option<(OneshotCommand, MergeStrategy)>);
-
-#[enum_dispatch(TraverseCommand)]
-pub trait TraverseExecDB {
-    fn len(&self) -> usize;
-    fn next_command(&mut self) -> IDCommandPair;
-    fn iter_data(&self) -> Iter<MiniCommand>;
-    fn move_last_to(&mut self, db_id: usize, original_idx: usize);
-    fn init_tbls(&mut self, vec: &Vec<usize>);
-    fn dispatch(&mut self, db_amount: usize, dispatch_fn: impl Fn(&[u8]) -> usize) {
-        let mut tbl_len = vec![0; db_amount];
-        let db_ids: Vec<usize> = self
-            .iter_data()
-            .map(|v| {
-                let id = dispatch_fn(v.get_key());
-                tbl_len[id] += 1 as usize;
-                id
-            })
-            .collect();
-
-        self.init_tbls(&tbl_len);
-
-        let mut order = db_ids.len();
-        for _ in 0..db_ids.len() {
-            order -= 1;
-            self.move_last_to(db_ids[order], order);
+impl Into<AtomicCMD> for OneshotCommand {
+    fn into(self) -> AtomicCMD {
+        use OneshotCommand::*;
+        match self {
+            Get(c) => AtomicCMD::Get(c),
+            Set(c) => AtomicCMD::Set(c),
+            Incr(c) => AtomicCMD::Incr(c),
+            Dx(c) => AtomicCMD::Dx(c),
         }
     }
 }
 
-pub enum HoldOnCommand {}
+#[enum_dispatch]
+#[derive(Debug)]
+pub enum AtomicCMD {
+    Get,
+    Set,
+    MGet,
+    MSet,
+    Dx,
+    Incr,
+    Subscribe,
+    Publish,
+    Unsubscribe,
+}
 
-pub enum MergeStrategy {
-    Reorder(Vec<usize>),
-    Drop,
-    Insert(usize),
+pub enum ZeroshotCommand {
+    Ping(Option<Bytes>),
+}
+
+#[enum_dispatch(AtomicCMD)]
+pub trait AtomicCMDMarker {}
+
+#[enum_dispatch(OneshotCommand)]
+pub trait OneshotExecDB {
+    fn get_key(&self) -> &[u8];
+}
+
+#[enum_dispatch(InitSubscription, DispatchToMultipleDB)]
+#[derive(Debug)]
+pub enum HoldOnCommand {
+    Subscribe(SubscribeDispatcher),
+    Publish(PublishDispatcher),
+    Unsubscribe(UnsubDispatcher),
+}
+
+crate::impl_enum_is_branch!(
+    HoldOnCommand,
+    need_subscribe,
+    (Subscribe, x) | (Unsubscribe, x) => True,
+    (Publish, x) => False
+);
+
+crate::impl_enum_is_branch!(
+    HoldOnCommand,
+    is_unsubscribe,
+    (Unsubscribe, x) => True,
+    (Subscribe, x) | (Publish, x) => False
+);
+
+#[enum_dispatch]
+pub trait InitSubscription {
+    fn set_subscription(
+        &mut self,
+        sub_state: &mut Vec<bool>,
+        ret_tx: &mpsc::Sender<Frame>,
+        handler_id: u64,
+        total_chn_amount: Arc<AtomicUsize>,
+    );
+}
+
+pub struct ResultCollector {
+    pub(in crate::cmd) result_type: ResultCollectorType,
+    pub(in crate::cmd) ret: Vec<Frame>,
+}
+
+enum ResultCollectorType {
+    Reorder(Vec<Vec<usize>>),
+    KeepFirst(usize),
+    SumFirst((usize, i64)),
+    AsIs,
+}
+
+impl ResultCollector {
+    pub fn get_ret(self) -> Vec<Frame> {
+        use ResultCollectorType::*;
+        assert!(
+            match &self.result_type {
+                KeepFirst(x) => *x == 0,
+                Reorder(tbl) => {
+                    let mut idx = tbl.len();
+                    while idx > 0 && tbl[idx - 1].len() == 0 {
+                        idx -= 1;
+                    }
+                    idx == 0
+                }
+                SumFirst(_) => true,
+                AsIs => true,
+            },
+            "result_collector should be exhausted before we can use the result"
+        );
+        self.ret
+    }
+
+    pub async fn merge(&mut self, ret_rx: oneshot::Receiver<Frame>) -> Result<()> {
+        use ResultCollectorType::*;
+        match &mut self.result_type {
+            KeepFirst(x) => {
+                if *x == 0 {
+                    return Ok(());
+                }
+                *x -= 1;
+                let f = ret_rx.await.map_err(|e| Error::new(e))?;
+                unsafe {
+                    self.ret.as_mut_ptr().add(*x).write(f);
+                }
+                Ok(())
+            }
+            Reorder(tbl) => {
+                while tbl.len() > 0 && tbl[tbl.len() - 1].len() == 0 {
+                    tbl.pop();
+                }
+                if tbl.len() == 0 {
+                    panic!("expecting something left");
+                }
+                let order = tbl.pop().unwrap();
+                if let Frame::Arrays(arr) = ret_rx.await.map_err(|e| Error::new(e))? {
+                    for (f, o) in arr.into_iter().zip(order) {
+                        unsafe {
+                            self.ret.as_mut_ptr().add(o).write(f);
+                        }
+                    }
+                } else {
+                    panic!("Only Frame::Array can be reordered.");
+                }
+                Ok(())
+            }
+            SumFirst((x, res)) => {
+                if *x == 0 {
+                    return Ok(());
+                }
+                *x -= 1;
+                let f = ret_rx.await.map_err(|e| Error::new(e))?;
+                *res += match f {
+                    Frame::Integers(v) => v,
+                    _ => {
+                        panic!("SumFirst can only be applied to integers");
+                    }
+                };
+                if *x == 0 {
+                    self.ret.push(Frame::Integers(res.clone()));
+                }
+                Ok(())
+            }
+            AsIs => {
+                let f = ret_rx.await.map_err(|e| Error::new(e))?;
+                let f_arr = match f {
+                    Frame::Arrays(arr) => arr,
+                    _ => panic!(),
+                };
+                self.ret.extend_from_slice(f_arr.as_slice());
+                Ok(())
+            }
+        }
+    }
 }
 
 #[derive(Debug, err_derive::Error)]
@@ -154,40 +253,38 @@ fn missing_operation() -> Error {
     Error::new(CommandError::MissingOperation)
 }
 
-fn rolling_hash(arr: &[u8]) -> Result<usize> {
-    let mut res = 0;
-    for &b in arr {
-        if b <= b'z' && b >= b'a' {
-            res = (res * 26 + (b - b'a') as usize) % utils::PRIME;
-        } else if b <= b'Z' && b >= b'A' {
-            res = (res * 26 + (b - b'A') as usize) % utils::PRIME;
-        } else {
-            return Err(Error::new(CommandError::InvalidOperation));
-        }
-    }
-    Ok(res)
+fn invalid_operand() -> Error {
+    Error::new(CommandError::InvalidOperand)
 }
 
-const GET: usize = rolling_hash_const(b"get");
-const SET: usize = rolling_hash_const(b"set");
-const MSET: usize = rolling_hash_const(b"mset");
-const MGET: usize = rolling_hash_const(b"mget");
-const INCR: usize = rolling_hash_const(b"incr");
-const DX: usize = rolling_hash_const(b"dx");
+fn invalid_operation() -> Error {
+    Error::new(CommandError::InvalidOperation)
+}
 
 impl Command {
     pub fn new(frame: Frame) -> Result<Self> {
         let mut parser = CommandParser::new(frame)?;
         let cmd_string = parser.next_bytes()?.ok_or_else(missing_operation)?;
-        #[deny(unreachable_patterns)]
-        match rolling_hash(cmd_string.as_ref())? {
-            GET => Ok(Command::Oneshot(Get::new(&mut parser)?.into())),
-            SET => Ok(Command::Oneshot(Set::new(&mut parser)?.into())),
-            MSET => Ok(Command::Traverse(MSetDispatcher::new(&mut parser)?.into())),
-            MGET => Ok(Command::Traverse(MGetDispatcher::new(&mut parser)?.into())),
-            INCR => Ok(Command::Oneshot(Incr::new(&mut parser)?.into())),
-            DX => Ok(Command::Traverse(DxDispatcher::new(&mut parser)?.into())),
-            _ => Err(Error::new(CommandError::NotImplemented)),
+        trace!("cmd_string: {:?}", cmd_string);
+        use Command::*;
+        use CommandTable::*;
+        match binary_lookup(rolling_hash(cmd_string.as_ref())?) {
+            GET(v) => Ok(Oneshot(Get::new(&mut parser, v)?.into())),
+            SET(v) => Ok(Oneshot(Set::new(&mut parser, v)?.into())),
+            MSET => Ok(Traverse(MSetDispatcher::new(&mut parser)?.into())),
+            MGET => Ok(Traverse(MGetDispatcher::new(&mut parser)?.into())),
+            INCR(v) => Ok(Oneshot(Incr::new(&mut parser, v)?.into())),
+            DX => Ok(Traverse(DxDispatcher::new(&mut parser)?.into())),
+            SHUTDOWN => Ok(Oneshot(Dx::new(DxCommand::Shutdown).into())),
+            SUBSCRIBE => Ok(HoldOn(SubscribeDispatcher::new(&mut parser)?.into())),
+            PUBLISH => Ok(HoldOn(PublishDispatcher::new(&mut parser)?.into())),
+            UNSUBSCRIBE => Ok(HoldOn(UnsubDispatcher::new(&mut parser)?.into())),
+            PING => Ok(Zeroshot(ZeroshotCommand::Ping(if parser.len() == 0 {
+                None
+            } else {
+                parser.next_bytes()?
+            }))),
+            UNIMPLEMENTED => Err(Error::new(CommandError::NotImplemented)),
         }
     }
 }

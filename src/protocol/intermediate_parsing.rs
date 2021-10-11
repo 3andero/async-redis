@@ -69,6 +69,20 @@ impl IntermediateToken {
         ret
     }
 
+    fn skip_to_next_line(&mut self, buf: &mut ReusableBuf) -> FrameResult<()> {
+        if buf.len() < 2 {
+            return Err(FrameError::Incomplete);
+        }
+        for i in 0..buf.len() - 1 {
+            if buf[i] == b'\r' && buf[i + 1] == b'\n' {
+                buf.advance(i + 2);
+                return Ok(());
+            }
+        }
+        buf.advance(buf.len() - 1);
+        return Ok(());
+    }
+
     fn read_expected(&mut self, buf: &mut ReusableBuf) -> FrameResult<Bytes> {
         assert!(self.expected_len.is_some());
         let span = self.expected_len.unwrap();
@@ -156,8 +170,9 @@ impl IntermediateToken {
                     self.data = Some(Frame::Arrays(Vec::with_capacity(maybe_len as usize)));
                 }
             }
-            _ => {
-                return Err(FrameError::NotImplemented);
+            x => {
+                self.skip_to_next_line(buf)?;
+                return Err(FrameError::NotImplemented(x));
             }
         }
 

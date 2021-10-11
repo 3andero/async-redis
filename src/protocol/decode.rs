@@ -101,7 +101,7 @@ pub fn decode(buf: &mut Bytes) -> FrameResult<Frame> {
         }
         x => {
             error!("Not Implemented: {}", x);
-            return Err(FrameError::NotImplemented);
+            return Err(FrameError::NotImplemented(x));
         }
     }
 }
